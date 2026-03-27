@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from crewai.flow.flow import Flow, start, listen
 
 from agents.trend_agent import get_trending_topics
-from agents.script_agent import generate_video_script
+from agents.script_agent import generate_video_script, generate_history_video_script
 from agents.voice_agent import generate_voiceover
 from agents.visual_agent import generate_scene_images
 from agents.upload_agent import authenticate, upload_video, set_thumbnail
@@ -41,6 +41,7 @@ from config.settings import settings
 class VideoProductionState(BaseModel):
     # Input (optional override from CLI)
     override_topic: Optional[str] = None
+    language: str = "english"   # "english" or "hindi"
 
     # Runtime
     run_id: str = ""
@@ -102,7 +103,7 @@ class YouTubeAutomationFlow(Flow[VideoProductionState]):
     @listen(discover_trends)
     def generate_script(self) -> None:
         """Use Gemini to select a topic, write a script, and generate SEO metadata."""
-        vs = generate_video_script(self.state.headlines)
+        vs = generate_video_script(self.state.headlines, language=self.state.language)
 
         self.state.topic = vs.topic
         self.state.full_script = vs.full_script
@@ -122,7 +123,7 @@ class YouTubeAutomationFlow(Flow[VideoProductionState]):
             / f"{self.state.run_id}_narration.mp3"
         )
         self.state.audio_path = str(
-            generate_voiceover(self.state.full_script, audio_path)
+            generate_voiceover(self.state.full_script, audio_path, language=self.state.language)
         )
 
     @listen(create_voiceover)
@@ -204,4 +205,167 @@ class YouTubeAutomationFlow(Flow[VideoProductionState]):
         logger.info("=" * 60)
 
         # Keep output directory tidy — delete oldest runs beyond the last 5
+        cleanup_old_outputs(settings.output_dir, keep_latest=5)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# History Storytelling Pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+class HistoryProductionState(BaseModel):
+    # CLI overrides
+    era: Optional[str] = None
+    theme: Optional[str] = None
+    language: str = "english"   # "english" or "hindi"
+
+    # Runtime
+    run_id: str = ""
+
+    # Research
+    topic: str = ""
+    history_era: str = ""
+    region: str = ""
+    research_brief: dict = {}
+
+    # Script
+    full_script: str = ""
+    title: str = ""
+    description: str = ""
+    tags: list[str] = []
+    thumbnail_text: str = ""
+    scenes: list[str] = []
+    scene_image_prompts: list[str] = []
+
+    # File paths
+    audio_path: str = ""
+    image_paths: list[str] = []
+    video_path: str = ""
+    thumbnail_path: str = ""
+
+    # YouTube result
+    youtube_video_id: str = ""
+    youtube_url: str = ""
+
+
+class HistoryStorytellerFlow(Flow[HistoryProductionState]):
+    """End-to-end history storytelling pipeline as a CrewAI Flow."""
+
+    @start()
+    def init_run(self) -> None:
+        self.state.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        setup_output_dirs(settings.output_dir)
+        logger.info("=" * 60)
+        logger.info("History pipeline run started  —  ID: %s", self.state.run_id)
+        logger.info("=" * 60)
+
+    @listen(init_run)
+    def pick_and_research(self) -> None:
+        """Pick a history topic and generate a deep research brief."""
+        hs = generate_history_video_script(
+            era=self.state.era,
+            theme=self.state.theme,
+            language=self.state.language,
+        )
+        self.state.topic = hs.topic
+        self.state.history_era = hs.era
+        self.state.region = hs.region
+        self.state.research_brief = hs.research_brief
+        self.state.full_script = hs.full_script
+        self.state.title = hs.title
+        self.state.description = hs.description
+        self.state.tags = hs.tags
+        self.state.thumbnail_text = hs.thumbnail_text
+        self.state.scenes = hs.scenes
+        self.state.scene_image_prompts = hs.scene_image_prompts
+        logger.info("History topic: %s (%s)", hs.topic, hs.era)
+
+    @listen(pick_and_research)
+    def create_voiceover(self) -> None:
+        """Convert the documentary script to narration audio."""
+        audio_path = (
+            Path(settings.output_dir)
+            / "audio"
+            / f"{self.state.run_id}_narration.mp3"
+        )
+        self.state.audio_path = str(
+            generate_voiceover(self.state.full_script, audio_path, language=self.state.language)
+        )
+
+    @listen(create_voiceover)
+    def fetch_visuals(self) -> None:
+        """Generate historically-styled AI images for each scene."""
+        images_dir = Path(settings.output_dir) / "images"
+        paths = generate_scene_images(
+            image_prompts=self.state.scene_image_prompts,
+            output_dir=images_dir,
+            run_id=self.state.run_id,
+        )
+        self.state.image_paths = [str(p) for p in paths]
+
+    @listen(fetch_visuals)
+    def compile_video(self) -> None:
+        """Assemble the final MP4 with Ken Burns animated images."""
+        video_dir = Path(settings.output_dir) / "videos"
+        safe_title = sanitize_filename(self.state.title, max_length=60)
+        video_path = video_dir / f"{self.state.run_id}_{safe_title}.mp4"
+
+        music_dir = Path("assets/music")
+        music_path: Optional[Path] = None
+        if music_dir.exists():
+            for ext in ("*.mp3", "*.wav", "*.ogg", "*.m4a"):
+                candidates = list(music_dir.glob(ext))
+                if candidates:
+                    music_path = candidates[0]
+                    break
+
+        assembled = assemble_video(
+            image_paths=[Path(p) for p in self.state.image_paths],
+            scenes=self.state.scenes,
+            audio_path=Path(self.state.audio_path),
+            output_path=video_path,
+            music_path=music_path,
+            animated=True,   # Ken Burns effect for history videos
+        )
+        self.state.video_path = str(assembled)
+
+        thumb_path = (
+            Path(settings.output_dir)
+            / "thumbnails"
+            / f"{self.state.run_id}_thumb.jpg"
+        )
+        generate_thumbnail(
+            hero_image_path=Path(self.state.image_paths[0]),
+            headline_text=self.state.title,
+            thumbnail_text=self.state.thumbnail_text,
+            output_path=thumb_path,
+        )
+        self.state.thumbnail_path = str(thumb_path)
+
+    @listen(compile_video)
+    def upload_to_youtube(self) -> None:
+        """Upload to YouTube under the Education category."""
+        creds = authenticate(settings.youtube_credentials_file)
+
+        video_id = upload_video(
+            credentials=creds,
+            video_path=Path(self.state.video_path),
+            title=self.state.title,
+            description=self.state.description,
+            tags=self.state.tags,
+            category_id=settings.youtube_history_category_id,  # Education
+            privacy_status=settings.youtube_privacy,
+        )
+        self.state.youtube_video_id = video_id
+
+        if self.state.thumbnail_path:
+            set_thumbnail(creds, video_id, Path(self.state.thumbnail_path))
+
+        self.state.youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+
+        logger.info("=" * 60)
+        logger.info("HISTORY VIDEO PUBLISHED  ✓")
+        logger.info("URL: %s", self.state.youtube_url)
+        logger.info("Title: %s", self.state.title)
+        logger.info("=" * 60)
+
         cleanup_old_outputs(settings.output_dir, keep_latest=5)

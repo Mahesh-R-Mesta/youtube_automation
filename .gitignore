@@ -48,3 +48,4 @@ htmlcov/
 # MoviePy temp files
 temp_audio.m4a
 TEMP_MPY_wvf_snd.mp3
+client_secrets.json

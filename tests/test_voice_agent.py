@@ -129,3 +129,29 @@ class TestGenerateVoiceover:
 
         with pytest.raises(RuntimeError, match="All TTS providers failed"):
             generate_voiceover("Script text", tmp_path / "out.mp3")
+
+    @patch("agents.voice_agent.generate_edge_tts")
+    @patch("agents.voice_agent.settings")
+    def test_uses_hindi_voice_when_language_is_hindi(self, mock_settings, mock_edge, tmp_path):
+        mock_settings.tts_voice = "en-US-AriaNeural"
+        mock_settings.tts_hindi_voice = "hi-IN-SwaraNeural"
+        expected = tmp_path / "narration.mp3"
+        mock_edge.return_value = expected
+
+        generate_voiceover("कुछ पाठ।", expected, language="hindi")
+
+        _args, _kwargs = mock_edge.call_args
+        assert _kwargs.get("voice") == "hi-IN-SwaraNeural"
+
+    @patch("agents.voice_agent.generate_edge_tts")
+    @patch("agents.voice_agent.settings")
+    def test_uses_english_voice_by_default(self, mock_settings, mock_edge, tmp_path):
+        mock_settings.tts_voice = "en-US-AriaNeural"
+        mock_settings.tts_hindi_voice = "hi-IN-SwaraNeural"
+        expected = tmp_path / "narration.mp3"
+        mock_edge.return_value = expected
+
+        generate_voiceover("Some text.", expected)
+
+        _args, _kwargs = mock_edge.call_args
+        assert _kwargs.get("voice") == "en-US-AriaNeural"

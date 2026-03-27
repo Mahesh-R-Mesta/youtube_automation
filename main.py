@@ -2,16 +2,29 @@
 YouTube Automation Pipeline — Entry Point
 ──────────────────────────────────────────
 Usage:
-  # Run the full pipeline immediately (one-shot)
+  # News pipeline — run once immediately
   python main.py --run-now
 
-  # Run with a specific topic (skips trend discovery)
+  # News pipeline — override topic
   python main.py --run-now --topic "Historic climate agreement signed by 195 nations"
 
-  # Start the daily scheduler (runs at SCHEDULE_HOUR:SCHEDULE_MINUTE from .env)
-  python main.py --schedule
+  # History storytelling — let Gemini pick any topic
+  python main.py --run-now --mode history
 
-  # Test the scheduler by firing in 1 minute (useful for verifying cron config)
+  # History storytelling — constrain era and/or theme
+  python main.py --run-now --mode history --era "Ancient Rome"
+  python main.py --run-now --mode history --theme "forgotten women"
+  python main.py --run-now --mode history --era "Medieval Europe" --theme "science"
+
+  # Hindi language — script + audio in Hindi
+  python main.py --run-now --language hindi
+  python main.py --run-now --mode history --era "Ancient India" --language hindi
+
+  # Start the daily scheduler (news mode by default)
+  python main.py --schedule
+  python main.py --schedule --mode history
+
+  # Test the scheduler by firing in 1 minute
   python main.py --schedule --test-schedule
 
 Environment:
@@ -26,19 +39,39 @@ from datetime import datetime, timedelta
 from utils.logger import logger
 
 
-def _run_pipeline(override_topic: str | None = None) -> None:
-    """Instantiate and execute the CrewAI pipeline Flow."""
-    from pipeline.orchestrator import YouTubeAutomationFlow
+def _run_pipeline(
+    mode: str = "news",
+    override_topic: str | None = None,
+    era: str | None = None,
+    theme: str | None = None,
+    language: str = "english",
+) -> None:
+    """Instantiate and execute the appropriate CrewAI pipeline Flow."""
+    if mode == "history":
+        from pipeline.orchestrator import HistoryStorytellerFlow
+        inputs: dict = {"language": language}
+        if era:
+            inputs["era"] = era
+        if theme:
+            inputs["theme"] = theme
+        flow = HistoryStorytellerFlow()
+        flow.kickoff(inputs=inputs)
+    else:
+        from pipeline.orchestrator import YouTubeAutomationFlow
+        inputs = {"language": language}
+        if override_topic:
+            inputs["override_topic"] = override_topic
+        flow = YouTubeAutomationFlow()
+        flow.kickoff(inputs=inputs)
 
-    inputs: dict = {}
-    if override_topic:
-        inputs["override_topic"] = override_topic
 
-    flow = YouTubeAutomationFlow()
-    flow.kickoff(inputs=inputs if inputs else None)
-
-
-def _start_scheduler(test_mode: bool = False) -> None:
+def _start_scheduler(
+    mode: str = "news",
+    era: str | None = None,
+    theme: str | None = None,
+    language: str = "english",
+    test_mode: bool = False,
+) -> None:
     """
     Start APScheduler with a daily cron trigger.
 
@@ -58,6 +91,7 @@ def _start_scheduler(test_mode: bool = False) -> None:
             trigger="date",
             run_date=fire_at,
             id="test_pipeline_run",
+            kwargs={"mode": mode, "era": era, "theme": theme, "language": language},
         )
         logger.info("TEST MODE: Pipeline will run once at %s UTC", fire_at.strftime("%H:%M:%S"))
     else:
@@ -70,6 +104,7 @@ def _start_scheduler(test_mode: bool = False) -> None:
             replace_existing=True,
             coalesce=True,          # collapse missed runs into one if scheduler was offline
             max_instances=1,        # never run two pipeline instances simultaneously
+            kwargs={"mode": mode, "era": era, "theme": theme, "language": language},
         )
         logger.info(
             "Scheduler started. Pipeline runs daily at %02d:%02d UTC.",
@@ -110,7 +145,38 @@ def main() -> None:
         type=str,
         default=None,
         metavar="TOPIC",
-        help="Override automatic trend discovery with a specific topic string.",
+        help="(news mode only) Override automatic trend discovery with a specific topic string.",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["news", "history"],
+        default="news",
+        metavar="MODE",
+        help="Pipeline mode: 'news' (default) or 'history'. History mode generates a storytelling video about a real historical event.",
+    )
+    parser.add_argument(
+        "--era",
+        type=str,
+        default=None,
+        metavar="ERA",
+        help="(history mode) Optional era filter, e.g. 'Ancient Rome', 'Victorian England', '20th Century'.",
+    )
+    parser.add_argument(
+        "--theme",
+        type=str,
+        default=None,
+        metavar="THEME",
+        help="(history mode) Optional thematic focus, e.g. 'forgotten women', 'science discoveries', 'lost civilizations'.",
+    )
+    parser.add_argument(
+        "--language",
+        type=str,
+        choices=["english", "hindi"],
+        default="english",
+        metavar="LANGUAGE",
+        help="Script and audio language: 'english' (default) or 'hindi'. "
+             "Hindi mode writes the script in Devanagari and uses the hi-IN-SwaraNeural voice.",
     )
     parser.add_argument(
         "--test-schedule",
@@ -121,10 +187,28 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.run_now:
-        logger.info("Starting pipeline (one-shot mode)...")
-        _run_pipeline(override_topic=args.topic)
+        mode_label = f"{args.mode} mode"
+        if args.language != "english":
+            mode_label += f" [{args.language}]"
+        if args.mode == "history" and (args.era or args.theme):
+            filters = ", ".join(f for f in [args.era, args.theme] if f)
+            mode_label += f" [{filters}]"
+        logger.info("Starting pipeline (%s)...", mode_label)
+        _run_pipeline(
+            mode=args.mode,
+            override_topic=args.topic,
+            era=args.era,
+            theme=args.theme,
+            language=args.language,
+        )
     elif args.schedule:
-        _start_scheduler(test_mode=args.test_schedule)
+        _start_scheduler(
+            mode=args.mode,
+            era=args.era,
+            theme=args.theme,
+            language=args.language,
+            test_mode=args.test_schedule,
+        )
 
 
 if __name__ == "__main__":

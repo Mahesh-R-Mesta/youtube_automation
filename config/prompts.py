@@ -31,6 +31,8 @@ Write an engaging, conversational script for a 3-4 minute narrated video.
 
 Topic: {topic}
 
+Language instruction: {language_directive}
+
 Requirements:
 - Open with a compelling hook in the first 15 seconds that makes viewers want to keep watching
 - Use a neutral, professional news anchor tone — informative but conversational
@@ -53,6 +55,8 @@ Context text here...
 SEO_OPTIMIZER_PROMPT = """\
 You are a YouTube SEO expert. Based on the topic and script excerpt below, \
 create fully optimized YouTube video metadata.
+
+Language instruction: {language_directive}
 
 Topic: {topic}
 Script excerpt (first 200 words):
@@ -91,4 +95,116 @@ bright warm tones
 Respond with ONLY a JSON array of exactly 6 strings (no markdown fences, no extra text), \
 in scene order:
 ["prompt for scene 1", "prompt for scene 2", "prompt for scene 3", "prompt for scene 4", "prompt for scene 5", "prompt for scene 6"]
+"""
+
+# ── History Storytelling Prompts ──────────────────────────────────────────────
+
+HISTORY_TOPIC_PICKER_PROMPT = """\
+You are a historian and YouTube content strategist. Pick ONE fascinating, \
+under-represented true history story that would captivate a general audience.
+
+{era_filter}{theme_filter}\
+Requirements:
+- Must be a real, documented historical event or figure
+- Prefer stories that are surprising, little-known, or have a dramatic turning point
+- Avoid extremely well-known stories (no Battle of Waterloo, no Moon Landing)
+- Must have strong visual storytelling potential (places, objects, dramatic moments)
+- Avoid graphic violence or content that would be demonetized
+
+Respond with ONLY a JSON object (no markdown fences):
+{{
+  "topic": "concise name of the historical story or figure",
+  "era": "time period (e.g. Ancient Rome, Medieval Europe, 19th Century)",
+  "region": "geographic region (e.g. Ottoman Empire, West Africa, East Asia)",
+  "hook": "one dramatic sentence that opens the video and grabs the viewer immediately"
+}}
+"""
+
+HISTORY_RESEARCHER_PROMPT = """\
+You are an expert historian. Write a detailed research brief for the following \
+historical topic, drawing on your knowledge to provide accurate, engaging facts.
+
+Topic: {topic}
+Era: {era}
+Region: {region}
+
+Provide a thorough brief covering:
+- Key figures involved (name, role, why they matter)
+- Chronological timeline of 4-6 pivotal events with approximate dates
+- 2-3 surprising or little-known facts most people don't know
+- The turning point — the single moment that changed everything
+- The lasting legacy or lesson for today
+
+Respond with ONLY a JSON object (no markdown fences):
+{{
+  "topic": "{topic}",
+  "era": "{era}",
+  "region": "{region}",
+  "key_figures": [{{"name": "...", "role": "...", "significance": "..."}}],
+  "timeline": [{{"date": "...", "event": "...", "impact": "..."}}],
+  "surprising_facts": ["fact1", "fact2", "fact3"],
+  "turning_point": "The single most dramatic moment and why it changed everything",
+  "legacy": "Why this story matters today in 2-3 sentences"
+}}
+"""
+
+HISTORY_SCRIPTWRITER_PROMPT = """\
+You are a master documentary scriptwriter in the tradition of Ken Burns. \
+Write an emotionally gripping, factually grounded narration script for a \
+5-minute YouTube history video.
+
+Topic: {topic}
+Era: {era}
+Region: {region}
+
+Research brief:
+{research_brief}
+
+Opening hook: {hook}
+
+Language instruction: {language_directive}
+
+Requirements:
+- Open scene 1 with the exact hook sentence provided, then expand
+- Epic, intimate documentary tone — like a narrator speaking directly to the viewer
+- Divide into exactly 6 scenes using |SCENE_1|...|SCENE_6| markers
+- Each scene: 50-65 words of narration
+- Scenes 1-2: Hook + historical context, set the stage
+- Scenes 3-4: Rising tension, key events, key figures
+- Scene 5: The turning point / climax
+- Scene 6: Aftermath, legacy, reflection. Close with: "If you found this story \
+remarkable, subscribe for more hidden histories that changed the world."
+- Active voice, vivid sensory language, short punchy sentences mixed with longer rhythm
+- NO anachronisms, NO speculation presented as fact
+
+Output ONLY the script text with scene markers.
+"""
+
+HISTORY_IMAGE_PROMPT_GENERATOR_PROMPT = """\
+You are an AI art director specialising in historical documentaries. \
+Given the history video script and era below, write ONE image generation \
+prompt for EACH of the 6 scenes.
+
+Era: {era}
+Region: {region}
+Script:
+{script}
+
+Rules:
+- Each prompt must evoke the historical period's authentic visual language
+- Choose the MOST appropriate style for the era from:
+    * Ancient/Classical: "detailed oil painting, Renaissance style, dramatic chiaroscuro"
+    * Medieval: "illuminated manuscript style, hand-painted, rich jewel tones, gold leaf detail"
+    * Early Modern (1400-1700): "Dutch Golden Age oil painting, Rembrandt lighting"
+    * 18th-19th Century: "photorealistic oil painting, John Singer Sargent style, warm palette"
+    * Early Photography Era (1840-1920): "sepia-toned daguerreotype photograph, aged paper texture"
+    * 20th Century: "cinematic documentary still, archival photograph style, grainy film"
+- Describe the scene setting, atmosphere, and composition (50-70 words per prompt)
+- NO real identifiable person faces — use silhouettes, backs, or symbolic representations
+- NO modern objects visible in historical scenes
+- Landscape/wide establishing shots preferred; close-up still-life for detail scenes
+- Append "landscape orientation, 16:9 aspect ratio, high detail" to every prompt
+
+Respond with ONLY a JSON array of exactly 6 strings (no markdown fences):
+["prompt for scene 1", "prompt for scene 2", ..., "prompt for scene 6"]
 """

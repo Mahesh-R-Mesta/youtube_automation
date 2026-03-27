@@ -117,7 +117,7 @@ def generate_elevenlabs(
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_voiceover(script: str, output_path: str | Path) -> Path:
+def generate_voiceover(script: str, output_path: str | Path, language: str = "english") -> Path:
     """
     Generate voiceover for the full script. Tries edge-tts first;
     falls back to ElevenLabs if edge-tts raises an exception.
@@ -125,6 +125,7 @@ def generate_voiceover(script: str, output_path: str | Path) -> Path:
     Args:
         script:      Full video script (may contain |SCENE_N| markers).
         output_path: Destination .mp3 file path.
+        language:    "english" (default) or "hindi". Selects the TTS voice.
 
     Returns:
         Path to the saved MP3 file.
@@ -134,9 +135,12 @@ def generate_voiceover(script: str, output_path: str | Path) -> Path:
     """
     clean_text = _clean_script(script)
 
+    # Pick voice based on language
+    voice = settings.tts_hindi_voice if language == "hindi" else settings.tts_voice
+
     # Primary: edge-tts (free, no API key)
     try:
-        return generate_edge_tts(clean_text, output_path)
+        return generate_edge_tts(clean_text, output_path, voice=voice)
     except Exception as exc:
         logger.warning("edge-tts failed (%s). Trying ElevenLabs fallback...", exc)
 

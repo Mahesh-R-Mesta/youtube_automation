@@ -188,3 +188,195 @@ class TestGenerateVideoScript:
 
         result = generate_video_script(sample_headlines)
         assert len(result.title) <= 100
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# write_script — language directive
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestWriteScriptLanguage:
+    @patch("agents.script_agent._call_gemini")
+    def test_hindi_directive_injected_into_news_script_prompt(self, mock_gemini):
+        mock_gemini.return_value = "|SCENE_1|\nX.\n|SCENE_2|\nX.\n|SCENE_3|\nX.\n|SCENE_4|\nX.\n|SCENE_5|\nX.\n|SCENE_6|\nX."
+        from agents.script_agent import write_script
+        write_script("AI revolution", language="hindi")
+        prompt_used = mock_gemini.call_args[0][0]
+        assert "Hindi" in prompt_used
+
+    @patch("agents.script_agent._call_gemini")
+    def test_english_directive_injected_by_default(self, mock_gemini):
+        mock_gemini.return_value = "|SCENE_1|\nX.\n|SCENE_2|\nX.\n|SCENE_3|\nX.\n|SCENE_4|\nX.\n|SCENE_5|\nX.\n|SCENE_6|\nX."
+        from agents.script_agent import write_script
+        write_script("AI revolution")
+        prompt_used = mock_gemini.call_args[0][0]
+        assert "English" in prompt_used
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# write_history_script
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestWriteHistoryScript:
+    _BRIEF = {
+        "topic": "The Dancing Plague of 1518",
+        "era": "Early Modern Europe",
+        "region": "Holy Roman Empire",
+        "hook": "In the summer of 1518, hundreds of people could not stop dancing.",
+        "key_figures": [{"name": "Frau Troffea", "role": "First dancer", "significance": "Started the epidemic"}],
+        "timeline": [{"date": "July 1518", "event": "Frau Troffea begins dancing", "impact": "Triggered mass hysteria"}],
+        "surprising_facts": ["Doctors prescribed more dancing as a cure.", "The city hired musicians to keep them going."],
+        "turning_point": "When city authorities endorsed the dancing, it spread uncontrollably.",
+        "legacy": "The event is studied as one of history's strangest cases of mass psychogenic illness.",
+    }
+
+    @patch("agents.script_agent._call_gemini")
+    def test_returns_string_with_scene_markers(self, mock_gemini):
+        mock_gemini.return_value = (
+            "|SCENE_1|\nHook text.\n\n"
+            "|SCENE_2|\nContext.\n\n"
+            "|SCENE_3|\nRising tension.\n\n"
+            "|SCENE_4|\nKey figure.\n\n"
+            "|SCENE_5|\nThe turning point.\n\n"
+            "|SCENE_6|\nLegacy. Subscribe for more."
+        )
+        from agents.script_agent import write_history_script
+        script = write_history_script(self._BRIEF)
+        assert isinstance(script, str)
+        assert "|SCENE_1|" in script
+        assert "|SCENE_6|" in script
+
+    @patch("agents.script_agent._call_gemini")
+    def test_injects_hook_into_prompt(self, mock_gemini):
+        mock_gemini.return_value = "|SCENE_1|\nHook.\n|SCENE_2|\nText.\n|SCENE_3|\nText.\n|SCENE_4|\nText.\n|SCENE_5|\nText.\n|SCENE_6|\nText."
+        from agents.script_agent import write_history_script
+        write_history_script(self._BRIEF)
+        prompt_used = mock_gemini.call_args[0][0]
+        assert self._BRIEF["hook"] in prompt_used
+
+    @patch("agents.script_agent._call_gemini")
+    def test_hindi_directive_injected_into_history_script_prompt(self, mock_gemini):
+        mock_gemini.return_value = "|SCENE_1|\nX.\n|SCENE_2|\nX.\n|SCENE_3|\nX.\n|SCENE_4|\nX.\n|SCENE_5|\nX.\n|SCENE_6|\nX."
+        from agents.script_agent import write_history_script
+        write_history_script(self._BRIEF, language="hindi")
+        prompt_used = mock_gemini.call_args[0][0]
+        assert "Hindi" in prompt_used
+
+    @patch("agents.script_agent._call_gemini")
+    def test_english_directive_injected_when_language_is_english(self, mock_gemini):
+        mock_gemini.return_value = "|SCENE_1|\nX.\n|SCENE_2|\nX.\n|SCENE_3|\nX.\n|SCENE_4|\nX.\n|SCENE_5|\nX.\n|SCENE_6|\nX."
+        from agents.script_agent import write_history_script
+        write_history_script(self._BRIEF, language="english")
+        prompt_used = mock_gemini.call_args[0][0]
+        assert "English" in prompt_used
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# generate_history_image_prompts
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGenerateHistoryImagePrompts:
+    @patch("agents.script_agent._call_gemini")
+    def test_returns_6_prompts(self, mock_gemini):
+        prompts = [f"oil painting of scene {i}, {i} era" for i in range(6)]
+        mock_gemini.return_value = json.dumps(prompts)
+        from agents.script_agent import generate_history_image_prompts
+        result = generate_history_image_prompts("script text", "Medieval", "Europe")
+        assert len(result) == 6
+
+    @patch("agents.script_agent._call_gemini")
+    def test_pads_to_6_when_fewer_returned(self, mock_gemini):
+        mock_gemini.return_value = json.dumps(["only three prompts"] * 3)
+        from agents.script_agent import generate_history_image_prompts
+        result = generate_history_image_prompts("script", "Ancient", "Egypt")
+        assert len(result) == 6
+
+    @patch("agents.script_agent._call_gemini")
+    def test_injects_era_and_region_into_prompt(self, mock_gemini):
+        mock_gemini.return_value = json.dumps([f"prompt {i}" for i in range(6)])
+        from agents.script_agent import generate_history_image_prompts
+        generate_history_image_prompts("script", "Victorian England", "British Empire")
+        prompt_used = mock_gemini.call_args[0][0]
+        assert "Victorian England" in prompt_used
+        assert "British Empire" in prompt_used
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# generate_history_video_script — full integration (all mocked)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGenerateHistoryVideoScript:
+    def _mock_all(self, mock_call, mock_pick, mock_research):
+        mock_pick.return_value = {
+            "topic": "The Dancing Plague of 1518",
+            "era": "Early Modern Europe",
+            "region": "Holy Roman Empire",
+            "hook": "In the summer of 1518, hundreds of people could not stop dancing.",
+        }
+        mock_research.return_value = {
+            "topic": "The Dancing Plague of 1518",
+            "era": "Early Modern Europe",
+            "region": "Holy Roman Empire",
+            "hook": "In the summer of 1518, hundreds of people could not stop dancing.",
+            "key_figures": [],
+            "timeline": [],
+            "surprising_facts": [],
+            "turning_point": "The city endorsed the dancing.",
+            "legacy": "Studied as mass psychogenic illness.",
+        }
+        script_text = (
+            "|SCENE_1|\nHook text here.\n\n"
+            "|SCENE_2|\nContext.\n\n"
+            "|SCENE_3|\nTension.\n\n"
+            "|SCENE_4|\nFigures.\n\n"
+            "|SCENE_5|\nClimax.\n\n"
+            "|SCENE_6|\nLegacy. Subscribe for more hidden histories."
+        )
+        mock_call.side_effect = [
+            script_text,  # write_history_script
+            json.dumps({  # generate_seo_metadata
+                "title": "The Dancing Plague of 1518 | Forgotten History",
+                "description": "A strange epidemic swept through Strasbourg.",
+                "tags": [f"tag{i}" for i in range(15)],
+                "thumbnail_text": "DANCING PLAGUE",
+            }),
+            json.dumps([f"oil painting scene {i}, medieval style" for i in range(6)]),  # image prompts
+        ]
+
+    @patch("agents.history_agent.research_topic")
+    @patch("agents.history_agent.pick_history_topic")
+    @patch("agents.script_agent._call_gemini")
+    def test_returns_history_script_dataclass(self, mock_call, mock_pick, mock_research):
+        from agents.script_agent import generate_history_video_script, HistoryScript
+        self._mock_all(mock_call, mock_pick, mock_research)
+        result = generate_history_video_script()
+        assert isinstance(result, HistoryScript)
+
+    @patch("agents.history_agent.research_topic")
+    @patch("agents.history_agent.pick_history_topic")
+    @patch("agents.script_agent._call_gemini")
+    def test_result_has_era_and_region(self, mock_call, mock_pick, mock_research):
+        from agents.script_agent import generate_history_video_script, HistoryScript
+        self._mock_all(mock_call, mock_pick, mock_research)
+        result = generate_history_video_script()
+        assert result.era == "Early Modern Europe"
+        assert result.region == "Holy Roman Empire"
+
+    @patch("agents.history_agent.research_topic")
+    @patch("agents.history_agent.pick_history_topic")
+    @patch("agents.script_agent._call_gemini")
+    def test_result_has_6_scenes_and_6_prompts(self, mock_call, mock_pick, mock_research):
+        from agents.script_agent import generate_history_video_script
+        self._mock_all(mock_call, mock_pick, mock_research)
+        result = generate_history_video_script()
+        assert len(result.scenes) == 6
+        assert len(result.scene_image_prompts) == 6
+
+    @patch("agents.history_agent.research_topic")
+    @patch("agents.history_agent.pick_history_topic")
+    @patch("agents.script_agent._call_gemini")
+    def test_passes_era_to_pick_history_topic(self, mock_call, mock_pick, mock_research):
+        from agents.script_agent import generate_history_video_script
+        self._mock_all(mock_call, mock_pick, mock_research)
+        generate_history_video_script(era="Ancient Rome", theme="military")
+        mock_pick.assert_called_once_with(era="Ancient Rome", theme="military")
+

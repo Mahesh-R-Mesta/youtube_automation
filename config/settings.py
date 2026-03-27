@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     newsdata_api_key: Optional[str] = None
 
     # ── TTS ───────────────────────────────────────────────────
-    tts_voice: str = "en-US-AriaNeural"
+    tts_voice: str = "en-US-AriaNeural"          # English default
+    tts_hindi_voice: str = "hi-IN-SwaraNeural"   # Hindi female (edge-tts)
     tts_rate: str = "+5%"
 
     # ── Video ─────────────────────────────────────────────────
@@ -41,11 +42,17 @@ class Settings(BaseSettings):
     # ── YouTube ───────────────────────────────────────────────
     youtube_credentials_file: str = "client_secrets.json"
     youtube_privacy: str = "public"
-    youtube_category_id: str = "25"  # 25 = News & Politics
+    youtube_category_id: str = "25"          # 25 = News & Politics
+    youtube_history_category_id: str = "27"  # 27 = Education
 
     # ── Scheduler ─────────────────────────────────────────────
     schedule_hour: int = 9
     schedule_minute: int = 0
+
+    # ── History storytelling mode ─────────────────────────────
+    # Both are optional overrides; leave empty to let Gemini choose freely.
+    history_era: Optional[str] = None    # e.g. "Ancient Rome"
+    history_theme: Optional[str] = None  # e.g. "forgotten women"
 
     # ── Output ────────────────────────────────────────────────
     output_dir: str = "output"

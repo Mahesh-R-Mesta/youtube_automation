@@ -30,6 +30,7 @@ from moviepy import (
     AudioFileClip,
     CompositeAudioClip,
     ImageClip,
+    VideoClip,
     concatenate_audioclips,
     concatenate_videoclips,
 )
@@ -175,6 +176,84 @@ def get_audio_duration(audio_path: str | Path) -> float:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Ken Burns animated clip
+# ─────────────────────────────────────────────────────────────────────────────
+
+_KB_DIRECTIONS = ("zoom_in", "zoom_out", "pan_left", "pan_right")
+
+
+def _ken_burns_clip(
+    frame: np.ndarray,
+    duration: float,
+    direction: str = "zoom_in",
+) -> VideoClip:
+    """
+    Create a Ken Burns animated clip from a static numpy frame.
+
+    Available directions (cycle through scenes for variety):
+      zoom_in    — slow zoom from 1.0× to 1.12×, centred
+      zoom_out   — slow zoom from 1.12× to 1.0×, centred
+      pan_left   — slide crop window from right to left
+      pan_right  — slide crop window from left to right
+
+    Args:
+        frame:     (H, W, 3) uint8 numpy array — the pre-rendered scene frame.
+        duration:  Clip duration in seconds.
+        direction: One of "zoom_in", "zoom_out", "pan_left", "pan_right".
+
+    Returns:
+        A moviepy VideoClip with the Ken Burns motion baked in.
+    """
+    h, w = frame.shape[:2]
+    # Inner crop frame at maximum zoom (12% larger in each dimension)
+    ZOOM = 1.12
+    inner_w = int(w / ZOOM)
+    inner_h = int(h / ZOOM)
+
+    pil_src = Image.fromarray(frame)
+
+    def make_frame(t: float) -> np.ndarray:
+        progress = t / duration  # 0.0 → 1.0
+
+        if direction == "zoom_in":
+            # Scale factor grows from 1.0× to ZOOM×
+            scale = 1.0 + (ZOOM - 1.0) * progress
+            crop_w = int(w / scale)
+            crop_h = int(h / scale)
+            left = (w - crop_w) // 2
+            top = (h - crop_h) // 2
+
+        elif direction == "zoom_out":
+            # Scale factor shrinks from ZOOM× to 1.0×
+            scale = ZOOM - (ZOOM - 1.0) * progress
+            crop_w = int(w / scale)
+            crop_h = int(h / scale)
+            left = (w - crop_w) // 2
+            top = (h - crop_h) // 2
+
+        elif direction == "pan_left":
+            # Crop moves from right side to left side
+            crop_w, crop_h = inner_w, inner_h
+            max_offset = w - inner_w
+            left = int(max_offset * (1.0 - progress))
+            top = (h - inner_h) // 2
+
+        else:  # pan_right
+            # Crop moves from left side to right side
+            crop_w, crop_h = inner_w, inner_h
+            max_offset = w - inner_w
+            left = int(max_offset * progress)
+            top = (h - inner_h) // 2
+
+        cropped = pil_src.crop((left, top, left + crop_w, top + crop_h))
+        resized = cropped.resize((w, h), Image.LANCZOS)
+        return np.array(resized)
+
+    clip = VideoClip(make_frame, duration=duration)
+    return clip
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Video assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -186,6 +265,7 @@ def assemble_video(
     music_path: Optional[Path] = None,
     width: Optional[int] = None,
     height: Optional[int] = None,
+    animated: bool = False,
 ) -> Path:
     """
     Assemble the final 1080p video from scene images, narration, and music.
@@ -193,7 +273,7 @@ def assemble_video(
     Steps:
       1. Measure narration duration → divide equally across scenes
       2. Render each scene frame with Pillow (image + subtitle bar)
-      3. Create moviepy ImageClip per scene
+      3. Create moviepy clip per scene (static ImageClip or Ken Burns VideoClip)
       4. Concatenate all scenes
       5. Attach narration + optional background music (15% volume)
       6. Write H.264/AAC MP4
@@ -205,6 +285,7 @@ def assemble_video(
         output_path: Destination MP4 path.
         music_path:  Optional background music path (auto-looped if shorter).
         width/height: Override output resolution (defaults from settings).
+        animated:    If True, apply Ken Burns pan/zoom effect to each scene.
 
     Returns:
         Path to the rendered MP4 file.
@@ -224,16 +305,23 @@ def assemble_video(
     )
 
     # ── Scene clips ───────────────────────────────────────────────────────────
-    scene_clips: list[ImageClip] = []
+    scene_clips = []
     for i, (img_path, scene_text) in enumerate(zip(image_paths, scenes)):
         # Use the first sentence as subtitle (max 120 chars)
         first_sentence = (scene_text.split(".")[0] + ".").strip()
         subtitle = first_sentence[:120]
 
         frame = _render_scene_frame(img_path, subtitle, font_path, w, h)
-        clip = ImageClip(frame).with_duration(scene_duration)
+
+        if animated:
+            # Cycle through Ken Burns directions for visual variety
+            direction = _KB_DIRECTIONS[i % len(_KB_DIRECTIONS)]
+            clip = _ken_burns_clip(frame, scene_duration, direction=direction)
+        else:
+            clip = ImageClip(frame).with_duration(scene_duration)
+
         scene_clips.append(clip)
-        logger.debug("Scene %d/%d clip ready", i + 1, num_scenes)
+        logger.debug("Scene %d/%d clip ready (animated=%s)", i + 1, num_scenes, animated)
 
     # ── Concatenate ───────────────────────────────────────────────────────────
     final_video = concatenate_videoclips(scene_clips)
@@ -352,7 +440,7 @@ def generate_thumbnail(
         font_main = ImageFont.load_default()
 
     # ── Badge: "NEWS UPDATE" ─────────────────────────────────────────────────
-    badge_text = "NEWS UPDATE"
+    badge_text = "TIME TALES"
     badge_bbox = draw.textbbox((0, 0), badge_text, font=font_badge)
     badge_w = badge_bbox[2] - badge_bbox[0] + 30
     badge_h = badge_bbox[3] - badge_bbox[1] + 16
