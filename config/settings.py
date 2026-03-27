@@ -19,8 +19,9 @@ class Settings(BaseSettings):
     elevenlabs_api_key: Optional[str] = None
     elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
 
-    # ── Pexels ────────────────────────────────────────────────
-    pexels_api_key: str = Field(..., description="Pexels API key (required)")
+    # ── Pixazo (AI image generation) ─────────────────────────
+    # Free Flux 1 Schnell key at: https://api-console.pixazo.ai/api_keys
+    pixazo_api_key: Optional[str] = None
 
     # ── Trend Discovery (both optional — RSS feeds always run without keys) ──
     # The Guardian: free key at https://bopenplatform.theguardian.com/access/

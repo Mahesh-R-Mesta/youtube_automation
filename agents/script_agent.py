@@ -5,7 +5,7 @@ Uses Google Gemini 2.5 Flash to:
   1. Select the most YouTube-worthy topic from trending headlines
   2. Write a full 6-scene narrated video script
   3. Generate SEO-optimised title, description, tags, and thumbnail text
-  4. Extract Pexels search keywords for each scene
+  4. Generate Flux AI image prompts for each scene (used by visual_agent)
 
 All Gemini calls use the official google-genai SDK (NOT the deprecated
 google-generativeai package which was EOL'd November 2025).
@@ -24,7 +24,7 @@ from config.prompts import (
     TOPIC_SELECTOR_PROMPT,
     SCRIPTWRITER_PROMPT,
     SEO_OPTIMIZER_PROMPT,
-    KEYWORD_EXTRACTOR_PROMPT,
+    IMAGE_PROMPT_GENERATOR_PROMPT,
 )
 from utils.logger import logger
 
@@ -41,8 +41,8 @@ class VideoScript:
     tags: list[str]
     thumbnail_text: str
     full_script: str
-    scenes: list[str]           # per-scene narration text (6 items)
-    scene_keywords: list[str]   # Pexels search keyword per scene (6 items)
+    scenes: list[str]               # per-scene narration text (6 items)
+    scene_image_prompts: list[str]  # Flux AI image generation prompt per scene (6 items)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,22 +127,30 @@ def generate_seo_metadata(topic: str, script: str) -> dict:
     return metadata
 
 
-def extract_scene_keywords(script: str) -> list[str]:
+def generate_scene_image_prompts(script: str) -> list[str]:
     """
-    Extract one Pexels stock-photo search keyword per scene.
-    Returns a list of exactly 6 strings.
+    Generate one Flux AI image generation prompt per scene.
+    Each prompt is a rich, cinematic description optimised for Flux 1 Schnell.
+    Returns a list of exactly 6 prompt strings.
     """
-    prompt = KEYWORD_EXTRACTOR_PROMPT.format(script=script)
-    response = _call_gemini(prompt, temperature=0.2)
-    keywords: list[str] = _parse_json(response)
+    prompt = IMAGE_PROMPT_GENERATOR_PROMPT.format(script=script)
+    response = _call_gemini(prompt, temperature=0.5)
+    image_prompts: list[str] = _parse_json(response)
 
-    # Ensure exactly 6 keywords — pad with fallbacks if needed
-    fallbacks = ["world news", "global news", "breaking news", "news studio", "city street", "newspaper"]
-    while len(keywords) < 6:
-        keywords.append(fallbacks[len(keywords) % len(fallbacks)])
+    # Ensure exactly 6 prompts — pad with neutral fallbacks if needed
+    fallbacks = [
+        "cinematic aerial view of a city skyline at golden hour, photorealistic 8K wide angle",
+        "dramatic close-up of a glowing digital globe with data streams, dark background, 8K",
+        "sweeping documentary shot of a modern parliament building at dusk, cinematic wide",
+        "abstract visualization of global connectivity, glowing network nodes, deep blue",
+        "photorealistic crowd of silhouetted people at a public square, golden sunset backlight",
+        "dramatic macro shot of a newspaper headline with shallow depth of field, cinematic",
+    ]
+    while len(image_prompts) < 6:
+        image_prompts.append(fallbacks[len(image_prompts) % len(fallbacks)])
 
-    result = keywords[:6]
-    logger.info("Scene keywords: %s", result)
+    result = image_prompts[:6]
+    logger.info("Scene image prompts generated (%d scenes)", len(result))
     return result
 
 
@@ -173,7 +181,7 @@ def generate_video_script(headlines: list[dict]) -> VideoScript:
       1. Select best YouTube topic from headline list
       2. Write full 6-scene script
       3. Generate SEO metadata
-      4. Extract scene-level Pexels keywords
+      4. Generate Flux AI image prompts per scene
     """
     # 1. Topic selection
     topic_result = select_topic(headlines)
@@ -185,17 +193,18 @@ def generate_video_script(headlines: list[dict]) -> VideoScript:
     # 3. SEO metadata
     seo = generate_seo_metadata(topic, script)
 
-    # 4. Scene keywords
-    keywords = extract_scene_keywords(script)
+    # 4. Scene image prompts (replaces Pexels keyword extraction)
+    image_prompts = generate_scene_image_prompts(script)
     scenes = parse_scenes(script)
 
     return VideoScript(
         topic=topic,
-        title=seo.get("title", topic[:100]),
+        title=seo.get("title", topic)[:100],
         description=seo.get("description", ""),
         tags=seo.get("tags", [])[:15],
         thumbnail_text=seo.get("thumbnail_text", "BREAKING NEWS"),
         full_script=script,
         scenes=scenes,
-        scene_keywords=keywords,
+        scene_image_prompts=image_prompts,
     )
+    

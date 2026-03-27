@@ -26,7 +26,7 @@ from crewai.flow.flow import Flow, start, listen
 from agents.trend_agent import get_trending_topics
 from agents.script_agent import generate_video_script
 from agents.voice_agent import generate_voiceover
-from agents.visual_agent import fetch_scene_images, get_pexels_attribution
+from agents.visual_agent import generate_scene_images
 from agents.upload_agent import authenticate, upload_video, set_thumbnail
 from pipeline.video_editor import assemble_video, generate_thumbnail
 from utils.helpers import setup_output_dirs, sanitize_filename, cleanup_old_outputs
@@ -54,7 +54,7 @@ class VideoProductionState(BaseModel):
     tags: list[str] = []
     thumbnail_text: str = ""
     scenes: list[str] = []
-    scene_keywords: list[str] = []
+    scene_image_prompts: list[str] = []
 
     # File paths (stored as strings for Pydantic compatibility)
     audio_path: str = ""
@@ -107,14 +107,11 @@ class YouTubeAutomationFlow(Flow[VideoProductionState]):
         self.state.topic = vs.topic
         self.state.full_script = vs.full_script
         self.state.title = vs.title
-        # Append mandatory Pexels attribution to every video description
-        self.state.description = (
-            vs.description + f"\n\n─────\n{get_pexels_attribution()}"
-        )
+        self.state.description = vs.description
         self.state.tags = vs.tags
         self.state.thumbnail_text = vs.thumbnail_text
         self.state.scenes = vs.scenes
-        self.state.scene_keywords = vs.scene_keywords
+        self.state.scene_image_prompts = vs.scene_image_prompts
 
     @listen(generate_script)
     def create_voiceover(self) -> None:
@@ -130,10 +127,10 @@ class YouTubeAutomationFlow(Flow[VideoProductionState]):
 
     @listen(create_voiceover)
     def fetch_visuals(self) -> None:
-        """Download one Pexels landscape image per scene."""
+        """Generate one AI scene image per scene via Pixazo Flux."""
         images_dir = Path(settings.output_dir) / "images"
-        paths = fetch_scene_images(
-            keywords=self.state.scene_keywords,
+        paths = generate_scene_images(
+            image_prompts=self.state.scene_image_prompts,
             output_dir=images_dir,
             run_id=self.state.run_id,
         )

@@ -67,21 +67,28 @@ Respond with ONLY a JSON object (no markdown fences, no extra text):
 }}
 """
 
-# ── Scene Keyword Extraction ──────────────────────────────────────────────────
-KEYWORD_EXTRACTOR_PROMPT = """\
-You are a visual researcher for a YouTube news video. Given the script below, \
-extract ONE specific Pexels stock photo search keyword for EACH of the 6 scenes.
+# ── Scene Image Prompt Generation ────────────────────────────────────────────
+IMAGE_PROMPT_GENERATOR_PROMPT = """\
+You are a cinematic AI image director. Given the video script below, write ONE \
+Flux AI image generation prompt for EACH of the 6 scenes.
 
 Script:
 {script}
 
-Rules:
-- Each keyword must describe a concrete, visual scene (location, action, or subject)
-- Use 2-4 word phrases (e.g. "stock market trading floor", "scientist laboratory", "city skyline night")
-- DO NOT use names of specific people, trademarked brands, or copyrighted logos
-- Keywords should be general enough to return results on Pexels stock photo search
-- Avoid abstract concepts (NOT "economic uncertainty" — YES "currency exchange desk")
+Rules for each prompt:
+- Write a rich, detailed description of a SINGLE photorealistic scene (50–80 words)
+- Start with the main subject and setting, then add lighting, mood, camera angle, and style
+- Use cinematic language: "golden hour lighting", "aerial drone shot", "shallow depth of field", \
+"photorealistic 8K", "cinematic wide angle", "dramatic chiaroscuro"
+- Match the mood of the narration — tense scenes get dramatic lighting, hopeful scenes get \
+bright warm tones
+- DO NOT include any real person's likeness, recognizable political figures, or copyrighted logos
+- DO NOT use words like "news anchor", "reporter", or "journalist" (triggers safety filters)
+- Use abstract or environmental representations of news topics \
+(e.g. "a glowing globe surrounded by digital data streams" for global tech news)
+- Landscape orientation is required: wide, cinematic framing
 
-Respond with ONLY a JSON array of exactly 6 strings, in scene order (no markdown fences):
-["keyword for scene 1", "keyword for scene 2", "keyword for scene 3", "keyword for scene 4", "keyword for scene 5", "keyword for scene 6"]
+Respond with ONLY a JSON array of exactly 6 strings (no markdown fences, no extra text), \
+in scene order:
+["prompt for scene 1", "prompt for scene 2", "prompt for scene 3", "prompt for scene 4", "prompt for scene 5", "prompt for scene 6"]
 """

@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from agents.script_agent import (
     _parse_json,
     parse_scenes,
-    extract_scene_keywords,
+    generate_scene_image_prompts,
     generate_video_script,
     VideoScript,
 )
@@ -85,34 +85,34 @@ class TestParseScenes:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# extract_scene_keywords — padding logic (Gemini mocked)
+# generate_scene_image_prompts — padding logic (Gemini mocked)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestExtractSceneKeywords:
+class TestGenerateSceneImagePrompts:
     @patch("agents.script_agent._call_gemini")
     def test_pads_to_6_when_fewer_returned(self, mock_gemini):
-        """If LLM returns only 4 keywords, the function must pad to 6."""
-        mock_gemini.return_value = '["climate summit", "solar panels", "polar ice", "protest march"]'
+        """If LLM returns only 4 prompts, the function must pad to 6."""
+        mock_gemini.return_value = '["cinematic climate summit", "solar panels wide", "polar ice landscape", "protest crowd"]'
 
-        result = extract_scene_keywords("any script text")
+        result = generate_scene_image_prompts("any script text")
         assert len(result) == 6
 
     @patch("agents.script_agent._call_gemini")
     def test_truncates_to_6_when_more_returned(self, mock_gemini):
-        """If LLM returns 8 keywords, only the first 6 should be used."""
-        words = [f"keyword {i}" for i in range(8)]
-        mock_gemini.return_value = json.dumps(words)
+        """If LLM returns 8 prompts, only the first 6 should be used."""
+        prompts = [f"cinematic scene {i}, photorealistic" for i in range(8)]
+        mock_gemini.return_value = json.dumps(prompts)
 
-        result = extract_scene_keywords("any script text")
+        result = generate_scene_image_prompts("any script text")
         assert len(result) == 6
 
     @patch("agents.script_agent._call_gemini")
     def test_returns_exactly_6_when_correct(self, mock_gemini):
-        words = [f"keyword {i}" for i in range(6)]
-        mock_gemini.return_value = json.dumps(words)
+        prompts = [f"cinematic scene {i}, photorealistic" for i in range(6)]
+        mock_gemini.return_value = json.dumps(prompts)
 
-        result = extract_scene_keywords("any script text")
-        assert result == words
+        result = generate_scene_image_prompts("any script text")
+        assert result == prompts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -144,10 +144,14 @@ class TestGenerateVideoScript:
                 "tags": [f"tag{i}" for i in range(15)],
                 "thumbnail_text": "CLIMATE DEAL",
             }),
-            # 4. extract_scene_keywords
+            # 4. generate_scene_image_prompts
             json.dumps([
-                "climate summit meeting", "solar energy farm", "polar ice melting",
-                "environmental protest", "government parliament", "earth satellite view",
+                "aerial view of a climate summit, cinematic wide angle, 8K",
+                "solar energy farm at dusk, photorealistic landscape",
+                "polar ice melting, documentary drone shot, dramatic",
+                "environmental protest crowd, silhouette against golden sky",
+                "modern parliament building exterior, wide establishing shot",
+                "earth from orbit with glowing city lights, space photography",
             ]),
         ]
 
@@ -160,7 +164,7 @@ class TestGenerateVideoScript:
         assert isinstance(result, VideoScript)
         assert result.topic == "Historic Climate Deal Signed by 195 Nations"
         assert len(result.scenes) == 6
-        assert len(result.scene_keywords) == 6
+        assert len(result.scene_image_prompts) == 6
         assert len(result.tags) <= 15
         assert result.title != ""
         assert result.thumbnail_text != ""
@@ -179,7 +183,7 @@ class TestGenerateVideoScript:
                 "tags": ["t"] * 15,
                 "thumbnail_text": "TEXT",
             }),
-            json.dumps([f"keyword {i}" for i in range(6)]),
+            json.dumps([f"cinematic scene {i}, photorealistic 8K" for i in range(6)]),
         ]
 
         result = generate_video_script(sample_headlines)
