@@ -24,8 +24,8 @@ from pipeline.video_editor import _ken_burns_clip, _KB_DIRECTIONS
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_frame(w: int = 64, h: int = 36) -> np.ndarray:
-    """Create a small solid-colour test frame (H, W, 3)."""
+def _make_portrait_frame(w: int = 108, h: int = 192) -> np.ndarray:
+    """Create a small solid-colour portrait test frame (H, W, 3)."""
     frame = np.zeros((h, w, 3), dtype=np.uint8)
     frame[:, :, 0] = 128  # red channel — distinguishable test pattern
     return frame
@@ -37,54 +37,49 @@ def _make_frame(w: int = 64, h: int = 36) -> np.ndarray:
 
 class TestKenBurnsClip:
     def test_clip_has_correct_duration(self):
-        frame = _make_frame()
+        frame = _make_portrait_frame()
         clip = _ken_burns_clip(frame, duration=5.0, direction="zoom_in")
         assert abs(clip.duration - 5.0) < 0.01
         clip.close()
 
     @pytest.mark.parametrize("direction", _KB_DIRECTIONS)
     def test_all_directions_produce_valid_frame(self, direction):
-        frame = _make_frame(w=128, h=72)
+        frame = _make_portrait_frame(w=108, h=192)
         clip = _ken_burns_clip(frame, duration=3.0, direction=direction)
-        # get_frame at start, middle, end — should not raise
         f0 = clip.get_frame(0.0)
         fmid = clip.get_frame(1.5)
         fend = clip.get_frame(2.99)
-        assert f0.shape == (72, 128, 3)
-        assert fmid.shape == (72, 128, 3)
-        assert fend.shape == (72, 128, 3)
+        assert f0.shape == (192, 108, 3)
+        assert fmid.shape == (192, 108, 3)
+        assert fend.shape == (192, 108, 3)
         clip.close()
 
     @pytest.mark.parametrize("direction", _KB_DIRECTIONS)
     def test_output_dtype_is_uint8(self, direction):
-        frame = _make_frame(w=64, h=36)
+        frame = _make_portrait_frame(w=108, h=192)
         clip = _ken_burns_clip(frame, duration=2.0, direction=direction)
         f = clip.get_frame(0.5)
         assert f.dtype == np.uint8
         clip.close()
 
     def test_zoom_in_centre_frame_differs_between_start_and_end(self):
-        """The centre pixel value should shift as the zoom progresses."""
-        frame = _make_frame(w=128, h=72)
-        # Give each pixel a unique colour for easy comparison
-        for y in range(72):
-            for x in range(128):
-                frame[y, x] = [x * 2 % 256, y * 3 % 256, 50]
+        frame = _make_portrait_frame(w=108, h=192)
+        for y in range(192):
+            for x in range(108):
+                frame[y, x] = [x * 2 % 256, y % 256, 50]
 
         clip = _ken_burns_clip(frame, duration=4.0, direction="zoom_in")
         f_start = clip.get_frame(0.0)
         f_end = clip.get_frame(3.99)
-        # The frames must be different (zoom has applied)
         assert not np.array_equal(f_start, f_end)
         clip.close()
 
     def test_directions_cycle_via_modulus(self):
-        """_KB_DIRECTIONS has exactly 4 items for easy cycling with i % 4."""
         assert len(_KB_DIRECTIONS) == 4
         assert "zoom_in" in _KB_DIRECTIONS
         assert "zoom_out" in _KB_DIRECTIONS
-        assert "pan_left" in _KB_DIRECTIONS
-        assert "pan_right" in _KB_DIRECTIONS
+        assert "pan_up" in _KB_DIRECTIONS
+        assert "pan_down" in _KB_DIRECTIONS
 
 
 # ─────────────────────────────────────────────────────────────────────────────

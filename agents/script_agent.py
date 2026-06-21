@@ -2,23 +2,22 @@
 Script Generation Agent
 ────────────────────────
 Uses Google Gemini 2.5 Flash to:
-  1. Select the most YouTube-worthy topic from trending headlines
-  2. Write a full 6-scene narrated video script
-  3. Generate SEO-optimised title, description, tags, and thumbnail text
-  4. Generate Flux AI image prompts for each scene (used by visual_agent)
+  1. Write a full 6-scene narrated Reel script for a spiritual topic
+  2. Generate Instagram metadata (caption + 30 hashtags)
+  3. Generate Pixazo Flux image prompts per scene (style-aware)
 
-Also provides the history storytelling pipeline:
-  A. write_history_script(research_brief) → str
-  B. generate_history_image_prompts(script, era, region) → list[str]
-  C. generate_history_video_script(era, theme) → HistoryScript
+Three content modes:
+  sloka    — verse explanation (Bhagavad Gita, Upanishads, Atharva Veda)
+  story    — scripture narrative (Mahabharata, Puranas, epic stories)
+  teaching — philosophy concept explanation
 
-All Gemini calls use the official google-genai SDK (NOT the deprecated
-google-generativeai package which was EOL'd November 2025).
+All Gemini calls use the official google-genai SDK.
 """
 
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Optional
 
 from google import genai
 from google.genai import types
@@ -26,12 +25,12 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import settings
 from config.prompts import (
-    TOPIC_SELECTOR_PROMPT,
-    SCRIPTWRITER_PROMPT,
-    SEO_OPTIMIZER_PROMPT,
-    IMAGE_PROMPT_GENERATOR_PROMPT,
-    HISTORY_SCRIPTWRITER_PROMPT,
-    HISTORY_IMAGE_PROMPT_GENERATOR_PROMPT,
+    SLOKA_EXPLAINER_PROMPT,
+    STORY_NARRATOR_PROMPT,
+    TEACHING_EXPLAINER_PROMPT,
+    SPIRITUAL_METADATA_PROMPT,
+    SPIRITUAL_IMAGE_PROMPT,
+    IMAGE_STYLE_DESCRIPTIONS,
 )
 from utils.logger import logger
 
@@ -41,27 +40,24 @@ from utils.logger import logger
 # ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
-class VideoScript:
-    topic: str
-    title: str
-    description: str
-    tags: list[str]
-    thumbnail_text: str
-    full_script: str
-    scenes: list[str]               # per-scene narration text (6 items)
-    scene_image_prompts: list[str]  # Flux AI image generation prompt per scene (6 items)
-
-
-@dataclass
-class HistoryScript(VideoScript):
-    """VideoScript extended with history-specific metadata."""
-    era: str = ""
-    region: str = ""
-    research_brief: dict = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.research_brief is None:
-            self.research_brief = {}
+class SpiritualScript:
+    scripture: str              # e.g., "bhagavad_gita"
+    scripture_ref: str          # e.g., "Chapter 2, Verse 47"
+    topic: str                  # e.g., "Bhagavad Gita 2:47 — Nishkama Karma"
+    mode: str                   # sloka | story | teaching
+    image_style: str            # tanjore | vedic | cosmic | minimalist
+    # Sanskrit / on-screen text
+    sanskrit_devanagari: str    # Devanagari Unicode text
+    transliteration: str        # Roman transliteration (IAST)
+    english_meaning: str        # English translation/summary
+    # Video content
+    full_script: str            # Complete narration with |SCENE_N| markers
+    scenes: list[str]           # Per-scene narration text (6 items)
+    scene_image_prompts: list[str]  # Flux AI image prompts (6 items)
+    # Instagram metadata
+    title: str                  # Short cover title (≤60 chars)
+    caption: str                # Instagram caption (≤2200 chars)
+    hashtags: list[str]         # 30 hashtags
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,10 +74,6 @@ def _client() -> genai.Client:
     reraise=True,
 )
 def _call_gemini(prompt: str, temperature: float = 0.7) -> str:
-    """
-    Call Gemini and return the response text.
-    Retries up to 3 times with exponential back-off on transient errors.
-    """
     client = _client()
     response = client.models.generate_content(
         model=settings.gemini_model,
@@ -92,280 +84,218 @@ def _call_gemini(prompt: str, temperature: float = 0.7) -> str:
 
 
 def _parse_json(text: str) -> dict | list:
-    """
-    Safely parse a JSON response from the LLM.
-    Strips markdown code fences if the model wrapped the response.
-    """
-    # Strip ```json ... ``` or ``` ... ``` fences
     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
     text = re.sub(r"\s*```$", "", text.strip(), flags=re.MULTILINE)
     return json.loads(text.strip())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Language helpers
+# Script generation
 # ─────────────────────────────────────────────────────────────────────────────
 
-_HINDI_DIRECTIVE = (
-    "Write the ENTIRE script in Hindi (Devanagari script). "
-    "Use natural, conversational Hindi that sounds fluent when read aloud."
-)
-_ENGLISH_DIRECTIVE = "Write the script in English."
-
-
-def _language_directive(language: str) -> str:
-    """Return the language instruction string for a given language code."""
-    return _HINDI_DIRECTIVE if language.lower() == "hindi" else _ENGLISH_DIRECTIVE
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pipeline steps
-# ─────────────────────────────────────────────────────────────────────────────
-
-def select_topic(headlines: list[dict]) -> dict:
+def write_spiritual_script(content: dict, mode: str) -> str:
     """
-    Ask Gemini to pick the single best YouTube topic from trending headlines.
-    Returns: {"selected_headline": str, "explanation": str}
-    """
-    headlines_text = "\n".join(
-        f"{i + 1}. [{item['source']}] {item['title']}"
-        for i, item in enumerate(headlines)
-    )
-    prompt = TOPIC_SELECTOR_PROMPT.format(headlines=headlines_text)
-    response = _call_gemini(prompt, temperature=0.3)
+    Write a 6-scene narration script for the given content and mode.
 
-    result = _parse_json(response)
-    logger.info("Selected topic: %s", result.get("selected_headline", ""))
-    return result
+    Args:
+        content:  Dict containing topic, scripture_ref, hook, sanskrit_devanagari,
+                  transliteration, english_meaning, context.
+        mode:     "sloka", "story", or "teaching".
 
+    Returns:
+        Raw script text with |SCENE_1|...|SCENE_6| markers.
+    """
+    mode = mode.lower()
 
-def write_script(topic: str, language: str = "english") -> str:
-    """
-    Generate a full 6-scene narrated video script for the topic.
-    Returns the raw script text with |SCENE_N| markers.
-    """
-    prompt = SCRIPTWRITER_PROMPT.format(
-        topic=topic,
-        language_directive=_language_directive(language),
-    )
+    if mode == "sloka":
+        prompt = SLOKA_EXPLAINER_PROMPT.format(
+            topic=content.get("topic", ""),
+            scripture_ref=content.get("scripture_ref", ""),
+            sanskrit_devanagari=content.get("sanskrit_devanagari", "ॐ"),
+            english_meaning=content.get("english_meaning", ""),
+            context=content.get("context", ""),
+            hook=content.get("hook", ""),
+        )
+    elif mode == "story":
+        prompt = STORY_NARRATOR_PROMPT.format(
+            topic=content.get("topic", ""),
+            scripture_ref=content.get("scripture_ref", ""),
+            context=content.get("context", ""),
+            hook=content.get("hook", ""),
+        )
+    elif mode == "teaching":
+        prompt = TEACHING_EXPLAINER_PROMPT.format(
+            topic=content.get("topic", ""),
+            scripture_ref=content.get("scripture_ref", ""),
+            sanskrit_devanagari=content.get("sanskrit_devanagari", "ॐ"),
+            transliteration=content.get("transliteration", "Om"),
+            context=content.get("context", ""),
+            hook=content.get("hook", ""),
+        )
+    else:
+        raise ValueError(f"Unknown mode '{mode}'. Must be 'sloka', 'story', or 'teaching'.")
+
     script = _call_gemini(prompt, temperature=0.8)
-    logger.info("Script generated: %d words", len(script.split()))
+    logger.info("Spiritual script generated: %d words (mode=%s)", len(script.split()), mode)
     return script
 
 
-def generate_seo_metadata(topic: str, script: str, language: str = "english") -> dict:
+def generate_spiritual_metadata(
+    topic: str,
+    scripture_ref: str,
+    mode: str,
+    script: str,
+) -> dict:
     """
-    Generate YouTube SEO metadata: title, description, tags, thumbnail_text.
+    Generate Instagram caption and hashtags.
+
+    Returns:
+        Dict with keys: title, caption, hashtags.
     """
-    seo_language_directive = (
-        "Write the title, description, and tags in Hindi (Devanagari)."
-        if language.lower() == "hindi"
-        else "Write the title, description, and tags in English."
-    )
-    excerpt = " ".join(script.split()[:200])
-    prompt = SEO_OPTIMIZER_PROMPT.format(
+    excerpt = " ".join(script.split()[:120])
+    prompt = SPIRITUAL_METADATA_PROMPT.format(
         topic=topic,
+        scripture_ref=scripture_ref,
+        mode=mode,
         script_excerpt=excerpt,
-        language_directive=seo_language_directive,
     )
-    response = _call_gemini(prompt, temperature=0.4)
+    response = _call_gemini(prompt, temperature=0.5)
     metadata = _parse_json(response)
-    logger.info("SEO title: %s", str(metadata.get("title", ""))[:70])
+    logger.info("Instagram metadata generated: title='%s'", str(metadata.get("title", ""))[:60])
     return metadata
 
 
-def generate_scene_image_prompts(script: str) -> list[str]:
+def generate_spiritual_image_prompts(
+    script: str,
+    scripture: str,
+    image_style: str,
+) -> list[str]:
     """
-    Generate one Flux AI image generation prompt per scene.
-    Each prompt is a rich, cinematic description optimised for Flux 1 Schnell.
-    Returns a list of exactly 6 prompt strings.
+    Generate 6 style-aware Pixazo Flux image prompts for the script.
+
+    Args:
+        script:      Full narration script with |SCENE_N| markers.
+        scripture:   Scripture key (used for thematic context in the prompt).
+        image_style: One of: tanjore | vedic | cosmic | minimalist.
+
+    Returns:
+        List of exactly 6 prompt strings.
     """
-    prompt = IMAGE_PROMPT_GENERATOR_PROMPT.format(script=script)
-    response = _call_gemini(prompt, temperature=0.5)
+    style_desc = IMAGE_STYLE_DESCRIPTIONS.get(
+        image_style,
+        IMAGE_STYLE_DESCRIPTIONS["tanjore"],  # default fallback
+    )
+    scripture_label = scripture.replace("_", " ").title()
+    prompt = SPIRITUAL_IMAGE_PROMPT.format(
+        image_style=image_style,
+        scripture=scripture_label,
+        script=script,
+        style_description=style_desc,
+    )
+    response = _call_gemini(prompt, temperature=0.6)
     image_prompts: list[str] = _parse_json(response)
 
-    # Ensure exactly 6 prompts — pad with neutral fallbacks if needed
-    fallbacks = [
-        "cinematic aerial view of a city skyline at golden hour, photorealistic 8K wide angle",
-        "dramatic close-up of a glowing digital globe with data streams, dark background, 8K",
-        "sweeping documentary shot of a modern parliament building at dusk, cinematic wide",
-        "abstract visualization of global connectivity, glowing network nodes, deep blue",
-        "photorealistic crowd of silhouetted people at a public square, golden sunset backlight",
-        "dramatic macro shot of a newspaper headline with shallow depth of field, cinematic",
+    # Ensure exactly 6 prompts — pad with themed fallbacks if model returned fewer
+    _fallbacks = [
+        f"Sacred temple interior with divine golden light filtering through ornate columns, "
+        f"{image_style} art style, portrait 9:16 vertical, no text, no letters, no watermarks",
+
+        f"Ancient Sanskrit manuscript scroll unfurled with glowing cosmic light surrounding it, "
+        f"{image_style} art style, portrait 9:16 vertical, no text, no letters, no watermarks",
+
+        f"Majestic lotus flower blooming in a serene celestial lake at sunrise, "
+        f"{image_style} art style, portrait 9:16 vertical, no text, no letters, no watermarks",
+
+        f"Divine Om symbol radiating golden light against a starfield sky, "
+        f"{image_style} art style, portrait 9:16 vertical, no text, no letters, no watermarks",
+
+        f"Sacred fire yajna ritual with glowing embers rising to the heavens, "
+        f"{image_style} art style, portrait 9:16 vertical, no text, no letters, no watermarks",
+
+        f"Peaceful ashram at dawn with Himalayan peaks in the background, "
+        f"{image_style} art style, portrait 9:16 vertical, no text, no letters, no watermarks",
     ]
     while len(image_prompts) < 6:
-        image_prompts.append(fallbacks[len(image_prompts) % len(fallbacks)])
+        image_prompts.append(_fallbacks[len(image_prompts) % len(_fallbacks)])
 
     result = image_prompts[:6]
-    logger.info("Scene image prompts generated (%d scenes)", len(result))
+    logger.info("Spiritual image prompts generated (%d scenes, style=%s)", len(result), image_style)
     return result
 
 
 def parse_scenes(script: str) -> list[str]:
     """
-    Split script text into individual scene strings using |SCENE_N| markers.
-    Returns a list of per-scene narration text (may be fewer than 6 if model
-    produced fewer markers — callers should handle this gracefully).
+    Split the script into per-scene narration strings using |SCENE_N| markers.
+    Returns a list of strings (6 items expected).
     """
     parts = re.split(r"\|SCENE_\d+\|", script)
     scenes = [s.strip() for s in parts if s.strip()]
-
     if len(scenes) != 6:
         logger.warning("Expected 6 scenes, got %d. Script markers may be malformed.", len(scenes))
-
     return scenes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Public API
+# High-level pipeline entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_video_script(headlines: list[dict], language: str = "english") -> VideoScript:
+def generate_spiritual_video_script(
+    topic_dict: dict,
+    content_dict: dict,
+    image_style: str,
+) -> SpiritualScript:
     """
-    Full pipeline: trending headlines → VideoScript object.
+    Full pipeline: topic + content → SpiritualScript.
 
     Steps:
-      1. Select best YouTube topic from headline list
-      2. Write full 6-scene script
-      3. Generate SEO metadata
-      4. Generate Flux AI image prompts per scene
-    """
-    # 1. Topic selection
-    topic_result = select_topic(headlines)
-    topic = topic_result["selected_headline"]
-
-    # 2. Scriptwriting
-    script = write_script(topic, language=language)
-
-    # 3. SEO metadata
-    seo = generate_seo_metadata(topic, script, language=language)
-
-    # 4. Scene image prompts (replaces Pexels keyword extraction)
-    image_prompts = generate_scene_image_prompts(script)
-    scenes = parse_scenes(script)
-
-    return VideoScript(
-        topic=topic,
-        title=seo.get("title", topic)[:100],
-        description=seo.get("description", ""),
-        tags=seo.get("tags", [])[:15],
-        thumbnail_text=seo.get("thumbnail_text", "BREAKING NEWS"),
-        full_script=script,
-        scenes=scenes,
-        scene_image_prompts=image_prompts,
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# History Storytelling Pipeline
-# ─────────────────────────────────────────────────────────────────────────────
-
-def write_history_script(research_brief: dict, language: str = "english") -> str:
-    """
-    Write a Ken-Burns-style documentary narration script from a research brief.
+      1. Write 6-scene narration script (mode-specific)
+      2. Generate Instagram metadata (caption + hashtags)
+      3. Generate Flux image prompts (style-aware)
+      4. Return SpiritualScript dataclass
 
     Args:
-        research_brief: Output of history_agent.research_topic() — contains
-                        topic, era, region, hook, key_figures, timeline, etc.
-        language:       "english" (default) or "hindi".
+        topic_dict:   Output of scripture_agent.pick_auto_topic().
+        content_dict: Output of scripture_agent.get_scripture_content().
+        image_style:  "tanjore" | "vedic" | "cosmic" | "minimalist".
 
     Returns:
-        Raw script text with |SCENE_1|...|SCENE_6| markers.
+        SpiritualScript fully populated.
     """
-    import json as _json
+    mode = topic_dict.get("mode", "sloka")
+    scripture = topic_dict.get("scripture", "bhagavad_gita")
+    topic = topic_dict.get("topic", "")
+    scripture_ref = topic_dict.get("scripture_ref", "")
 
-    brief_text = _json.dumps(research_brief, indent=2, ensure_ascii=False)
-    prompt = HISTORY_SCRIPTWRITER_PROMPT.format(
-        topic=research_brief.get("topic", ""),
-        era=research_brief.get("era", ""),
-        region=research_brief.get("region", ""),
-        research_brief=brief_text,
-        hook=research_brief.get("hook", ""),
-        language_directive=_language_directive(language),
-    )
-    script = _call_gemini(prompt, temperature=0.75)
-    logger.info("History script generated: %d words", len(script.split()))
-    return script
+    # Merge hook into content_dict for prompt building
+    merged = {**content_dict, **topic_dict}
 
+    # 1. Script
+    script = write_spiritual_script(merged, mode)
 
-def generate_history_image_prompts(script: str, era: str, region: str) -> list[str]:
-    """
-    Generate 6 historically-styled Flux image prompts for the history script.
-    Style is chosen automatically based on the era (oil painting, engraving, etc.).
+    # 2. Metadata
+    meta = generate_spiritual_metadata(topic, scripture_ref, mode, script)
 
-    Returns a list of exactly 6 prompt strings.
-    """
-    prompt = HISTORY_IMAGE_PROMPT_GENERATOR_PROMPT.format(
-        era=era,
-        region=region,
-        script=script,
-    )
-    response = _call_gemini(prompt, temperature=0.5)
-    image_prompts: list[str] = _parse_json(response)
+    # 3. Image prompts
+    image_prompts = generate_spiritual_image_prompts(script, scripture, image_style)
 
-    fallbacks = [
-        f"Ancient ruins at golden hour, {era} style, oil painting, dramatic chiaroscuro, landscape 16:9",
-        f"Rolling hills and ancient architecture of {region}, watercolour illustration, warm tones, wide angle",
-        f"Crowded marketplace in historical {region}, detailed engraving style, sepia tones, 16:9",
-        f"Storm clouds over a historical fortress, {era}, cinematic oil painting, dramatic lighting",
-        f"Ceremonial gathering under torch light, {era} period, illuminated manuscript style, gold detail",
-        f"Solitary figure at a crossroads at dusk, {era}, photorealistic oil painting, landscape 16:9",
-    ]
-    while len(image_prompts) < 6:
-        image_prompts.append(fallbacks[len(image_prompts) % len(fallbacks)])
-
-    result = image_prompts[:6]
-    logger.info("History scene image prompts generated (%d scenes)", len(result))
-    return result
-
-
-def generate_history_video_script(
-    era: str | None = None,
-    theme: str | None = None,
-    language: str = "english",
-) -> HistoryScript:
-    """
-    Full history pipeline: optional era/theme → HistoryScript.
-
-    Steps:
-      1. Pick a history topic (Gemini or curated fallback)
-      2. Research the topic (Gemini structured brief)
-      3. Write a Ken Burns-style documentary script
-      4. Generate SEO metadata
-      5. Generate historically-styled Flux image prompts
-    """
-    from agents.history_agent import pick_history_topic, research_topic
-
-    # 1. Topic selection
-    topic_dict = pick_history_topic(era=era, theme=theme)
-
-    # 2. Research
-    brief = research_topic(topic_dict)
-
-    # 3. Script
-    script = write_history_script(brief, language=language)
-
-    # 4. SEO metadata — use the history topic as context
-    seo = generate_seo_metadata(topic_dict["topic"], script, language=language)
-
-    # 5. Image prompts (historically styled) — always English for Pixazo
-    image_prompts = generate_history_image_prompts(
-        script,
-        era=brief.get("era", era or ""),
-        region=brief.get("region", ""),
-    )
+    # 4. Parse scenes
     scenes = parse_scenes(script)
 
-    return HistoryScript(
-        topic=topic_dict["topic"],
-        title=seo.get("title", topic_dict["topic"])[:100],
-        description=seo.get("description", ""),
-        tags=seo.get("tags", [])[:15],
-        thumbnail_text=seo.get("thumbnail_text", "FORGOTTEN HISTORY"),
+    return SpiritualScript(
+        scripture=scripture,
+        scripture_ref=scripture_ref,
+        topic=topic,
+        mode=mode,
+        image_style=image_style,
+        sanskrit_devanagari=content_dict.get("sanskrit_devanagari", "ॐ"),
+        transliteration=content_dict.get("transliteration", "Om"),
+        english_meaning=content_dict.get("english_meaning", ""),
         full_script=script,
         scenes=scenes,
         scene_image_prompts=image_prompts,
-        era=brief.get("era", era or ""),
-        region=brief.get("region", ""),
-        research_brief=brief,
+        title=meta.get("title", topic)[:60],
+        caption=meta.get("caption", ""),
+        hashtags=meta.get("hashtags", [])[:30],
     )
+
+

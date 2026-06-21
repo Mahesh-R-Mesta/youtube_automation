@@ -1,19 +1,24 @@
 """
-Pipeline Orchestrator
-──────────────────────
-Wires all agents together using a CrewAI Flow (deterministic, event-driven).
+Spiritual Content Pipeline Orchestrator
+─────────────────────────────────────────
+Wires all agents together using a CrewAI Flow.
 
 Flow steps (sequential):
-  init_run → discover_trends → generate_script → create_voiceover
-          → fetch_visuals → compile_video → upload_to_youtube
+  init_run → pick_topic → generate_script → create_voiceover
+           → fetch_visuals → compile_video → upload_to_instagram
 
-State is tracked in VideoProductionState (a Pydantic model). Each step reads
-from and writes to self.state — no data is passed as function arguments.
+State is tracked in SpiritualProductionState (Pydantic model).
+All inter-step data lives on self.state — no argument passing.
 
-Usage:
-    flow = YouTubeAutomationFlow()
-    flow.kickoff()                                     # auto topic selection
-    flow.kickoff(inputs={"override_topic": "My Topic"}) # manual topic
+Usage (via main.py):
+    flow = SpiritualContentFlow()
+    flow.kickoff(inputs={
+        "scripture": "bhagavad_gita",   # or None for auto-pick
+        "mode": "sloka",                # sloka | story | teaching
+        "image_style": "tanjore",       # tanjore | vedic | cosmic | minimalist
+        "voice_gender": "female",       # female | male
+        "skip_upload": False,           # True = generate only
+    })
 """
 
 from datetime import datetime
@@ -23,11 +28,11 @@ from typing import Optional
 from pydantic import BaseModel
 from crewai.flow.flow import Flow, start, listen
 
-from agents.trend_agent import get_trending_topics
-from agents.script_agent import generate_video_script, generate_history_video_script
+from agents.scripture_agent import pick_auto_topic, get_scripture_content
+from agents.script_agent import generate_spiritual_video_script
 from agents.voice_agent import generate_voiceover
 from agents.visual_agent import generate_scene_images
-from agents.upload_agent import authenticate, upload_video, set_thumbnail
+from agents.upload_agent import upload_reel
 from pipeline.video_editor import assemble_video, generate_thumbnail
 from utils.helpers import setup_output_dirs, sanitize_filename, cleanup_old_outputs
 from utils.logger import logger
@@ -35,100 +40,144 @@ from config.settings import settings
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Shared pipeline state
+# Pipeline state
 # ─────────────────────────────────────────────────────────────────────────────
 
-class VideoProductionState(BaseModel):
-    # Input (optional override from CLI)
-    override_topic: Optional[str] = None
-    language: str = "english"   # "english" or "hindi"
+class SpiritualProductionState(BaseModel):
+    # ── CLI inputs ────────────────────────────────────────────
+    scripture: Optional[str] = None      # None → Gemini picks
+    override_topic: Optional[str] = None # freeform topic override
+    mode: str = "sloka"                  # sloka | story | teaching
+    image_style: str = "tanjore"         # tanjore | vedic | cosmic | minimalist
+    voice_gender: str = "female"         # female | male
+    skip_upload: bool = False
 
-    # Runtime
+    # ── Runtime ───────────────────────────────────────────────
     run_id: str = ""
-    headlines: list[dict] = []
 
-    # Script
+    # ── Topic / content ───────────────────────────────────────
     topic: str = ""
+    scripture_ref: str = ""
+    sanskrit_devanagari: str = "ॐ"
+    transliteration: str = "Om"
+    english_meaning: str = ""
+
+    # ── Script ────────────────────────────────────────────────
     full_script: str = ""
-    title: str = ""
-    description: str = ""
-    tags: list[str] = []
-    thumbnail_text: str = ""
     scenes: list[str] = []
     scene_image_prompts: list[str] = []
 
-    # File paths (stored as strings for Pydantic compatibility)
+    # ── Instagram metadata ────────────────────────────────────
+    title: str = ""
+    caption: str = ""
+    hashtags: list[str] = []
+
+    # ── File paths (strings for Pydantic compatibility) ───────
     audio_path: str = ""
     image_paths: list[str] = []
     video_path: str = ""
     thumbnail_path: str = ""
 
-    # YouTube result
-    youtube_video_id: str = ""
-    youtube_url: str = ""
+    # ── Result ────────────────────────────────────────────────
+    instagram_url: str = ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CrewAI Flow
 # ─────────────────────────────────────────────────────────────────────────────
 
-class YouTubeAutomationFlow(Flow[VideoProductionState]):
-    """End-to-end YouTube video production pipeline as a CrewAI Flow."""
+class SpiritualContentFlow(Flow[SpiritualProductionState]):
+    """End-to-end Instagram Reel production pipeline for spiritual content."""
 
     @start()
     def init_run(self) -> None:
-        """Initialise run ID and create output directory structure."""
+        """Initialise run ID and create output directories."""
         self.state.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         setup_output_dirs(settings.output_dir)
         logger.info("=" * 60)
-        logger.info("Pipeline run started  —  ID: %s", self.state.run_id)
+        logger.info("Spiritual content pipeline started  —  ID: %s", self.state.run_id)
+        logger.info(
+            "Scripture: %s | Mode: %s | Style: %s | Voice: %s",
+            self.state.scripture or "auto",
+            self.state.mode,
+            self.state.image_style,
+            self.state.voice_gender,
+        )
         logger.info("=" * 60)
 
     @listen(init_run)
-    def discover_trends(self) -> None:
-        """Fetch trending headlines from RSS + Reddit (or use CLI override)."""
+    def pick_topic(self) -> None:
+        """Select the spiritual topic (Gemini auto-pick or manual override)."""
         if self.state.override_topic:
+            # Manual topic: create a minimal topic dict for downstream steps
             logger.info("Manual topic override: %s", self.state.override_topic)
-            self.state.headlines = [
-                {
-                    "title": self.state.override_topic,
-                    "source": "manual override",
-                    "url": "",
-                    "summary": "",
-                }
-            ]
+            topic_dict = {
+                "scripture": self.state.scripture or settings.default_scripture or "bhagavad_gita",
+                "mode": self.state.mode,
+                "topic": self.state.override_topic,
+                "scripture_ref": self.state.override_topic,
+                "hook": self.state.override_topic,
+            }
         else:
-            self.state.headlines = get_trending_topics(max_topics=10)
+            topic_dict = pick_auto_topic(
+                scripture=self.state.scripture,
+                mode=self.state.mode,
+            )
 
-    @listen(discover_trends)
+        # Store topic details on state
+        self.state.topic = topic_dict["topic"]
+        self.state.scripture_ref = topic_dict.get("scripture_ref", "")
+        self.state.scripture = topic_dict.get("scripture", self.state.scripture or "bhagavad_gita")
+        self.state.mode = topic_dict.get("mode", self.state.mode)
+
+        # Retrieve Sanskrit text / content details
+        content_dict = get_scripture_content(topic_dict)
+        self.state.sanskrit_devanagari = content_dict.get("sanskrit_devanagari", "ॐ")
+        self.state.transliteration = content_dict.get("transliteration", "Om")
+        self.state.english_meaning = content_dict.get("english_meaning", "")
+
+        # Store merged topic + content for script generation (attach hook)
+        self._topic_dict = topic_dict
+        self._content_dict = content_dict
+
+        logger.info("Topic selected: [%s] %s", self.state.scripture, self.state.topic)
+
+    @listen(pick_topic)
     def generate_script(self) -> None:
-        """Use Gemini to select a topic, write a script, and generate SEO metadata."""
-        vs = generate_video_script(self.state.headlines, language=self.state.language)
+        """Generate the 6-scene script, image prompts, and Instagram metadata."""
+        ss = generate_spiritual_video_script(
+            topic_dict=self._topic_dict,
+            content_dict=self._content_dict,
+            image_style=self.state.image_style,
+        )
 
-        self.state.topic = vs.topic
-        self.state.full_script = vs.full_script
-        self.state.title = vs.title
-        self.state.description = vs.description
-        self.state.tags = vs.tags
-        self.state.thumbnail_text = vs.thumbnail_text
-        self.state.scenes = vs.scenes
-        self.state.scene_image_prompts = vs.scene_image_prompts
+        self.state.full_script = ss.full_script
+        self.state.scenes = ss.scenes
+        self.state.scene_image_prompts = ss.scene_image_prompts
+        self.state.title = ss.title
+        self.state.caption = ss.caption
+        self.state.hashtags = ss.hashtags
+        logger.info("Script ready: %d scenes, %d words", len(ss.scenes), len(ss.full_script.split()))
 
     @listen(generate_script)
     def create_voiceover(self) -> None:
-        """Convert the script to narration audio (edge-tts → ElevenLabs fallback)."""
+        """Convert narration to Indian-accented English audio via edge-tts."""
         audio_path = (
             Path(settings.output_dir)
             / "audio"
             / f"{self.state.run_id}_narration.mp3"
         )
         self.state.audio_path = str(
-            generate_voiceover(self.state.full_script, audio_path, language=self.state.language)
+            generate_voiceover(
+                self.state.full_script,
+                audio_path,
+                voice_gender=self.state.voice_gender,
+            )
         )
 
     @listen(create_voiceover)
     def fetch_visuals(self) -> None:
-        """Generate one AI scene image per scene via Pixazo Flux."""
+        """Generate one spiritual portrait AI image per scene via Pixazo Flux."""
         images_dir = Path(settings.output_dir) / "images"
         paths = generate_scene_images(
             image_prompts=self.state.scene_image_prompts,
@@ -139,14 +188,14 @@ class YouTubeAutomationFlow(Flow[VideoProductionState]):
 
     @listen(fetch_visuals)
     def compile_video(self) -> None:
-        """Assemble the final MP4 and generate the thumbnail."""
+        """Assemble the portrait Reel MP4 and generate the Instagram thumbnail."""
         video_dir = Path(settings.output_dir) / "videos"
         safe_title = sanitize_filename(self.state.title, max_length=60)
         video_path = video_dir / f"{self.state.run_id}_{safe_title}.mp4"
 
-        # Auto-detect background music (first audio file in assets/music/)
-        music_dir = Path("assets/music")
+        # Auto-detect background music
         music_path: Optional[Path] = None
+        music_dir = Path("assets/music")
         if music_dir.exists():
             for ext in ("*.mp3", "*.wav", "*.ogg", "*.m4a"):
                 candidates = list(music_dir.glob(ext))
@@ -160,10 +209,13 @@ class YouTubeAutomationFlow(Flow[VideoProductionState]):
             audio_path=Path(self.state.audio_path),
             output_path=video_path,
             music_path=music_path,
+            sanskrit_text=self.state.sanskrit_devanagari,
+            transliteration=self.state.transliteration,
+            scripture_ref=self.state.scripture_ref,
         )
         self.state.video_path = str(assembled)
 
-        # Generate YouTube thumbnail from first scene image
+        # Instagram square thumbnail (1080×1080)
         thumb_path = (
             Path(settings.output_dir)
             / "thumbnails"
@@ -171,201 +223,54 @@ class YouTubeAutomationFlow(Flow[VideoProductionState]):
         )
         generate_thumbnail(
             hero_image_path=Path(self.state.image_paths[0]),
-            headline_text=self.state.title,
-            thumbnail_text=self.state.thumbnail_text,
+            title_text=self.state.title,
+            sanskrit_text=self.state.sanskrit_devanagari,
             output_path=thumb_path,
         )
         self.state.thumbnail_path = str(thumb_path)
 
     @listen(compile_video)
-    def upload_to_youtube(self) -> None:
-        """Authenticate with YouTube and upload the finished video."""
-        creds = authenticate(settings.youtube_credentials_file)
+    def upload_to_instagram(self) -> None:
+        """Upload the Reel to Instagram (skipped if skip_upload=True)."""
+        if self.state.skip_upload:
+            logger.info("Upload skipped (--no-upload flag). Video saved at: %s", self.state.video_path)
+            self.state.instagram_url = f"file://{self.state.video_path}"
+            return
 
-        video_id = upload_video(
-            credentials=creds,
-            video_path=Path(self.state.video_path),
-            title=self.state.title,
-            description=self.state.description,
-            tags=self.state.tags,
-            category_id=settings.youtube_category_id,
-            privacy_status=settings.youtube_privacy,
-        )
-        self.state.youtube_video_id = video_id
+        if not settings.instagram_username or not settings.instagram_password:
+            logger.warning(
+                "Instagram credentials not set. Skipping upload. "
+                "Set INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD in .env."
+            )
+            self.state.instagram_url = f"file://{self.state.video_path}"
+            return
 
-        if self.state.thumbnail_path:
-            set_thumbnail(creds, video_id, Path(self.state.thumbnail_path))
+        # Build full caption: caption text + newline + space-separated hashtags
+        hashtag_block = " ".join(self.state.hashtags)
+        full_caption = f"{self.state.caption}\n\n{hashtag_block}"
 
-        self.state.youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-
-        logger.info("=" * 60)
-        logger.info("VIDEO PUBLISHED  ✓")
-        logger.info("URL: %s", self.state.youtube_url)
-        logger.info("Title: %s", self.state.title)
-        logger.info("=" * 60)
-
-        # Keep output directory tidy — delete oldest runs beyond the last 5
-        cleanup_old_outputs(settings.output_dir, keep_latest=5)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# History Storytelling Pipeline
-# ─────────────────────────────────────────────────────────────────────────────
-
-class HistoryProductionState(BaseModel):
-    # CLI overrides
-    era: Optional[str] = None
-    theme: Optional[str] = None
-    language: str = "english"   # "english" or "hindi"
-
-    # Runtime
-    run_id: str = ""
-
-    # Research
-    topic: str = ""
-    history_era: str = ""
-    region: str = ""
-    research_brief: dict = {}
-
-    # Script
-    full_script: str = ""
-    title: str = ""
-    description: str = ""
-    tags: list[str] = []
-    thumbnail_text: str = ""
-    scenes: list[str] = []
-    scene_image_prompts: list[str] = []
-
-    # File paths
-    audio_path: str = ""
-    image_paths: list[str] = []
-    video_path: str = ""
-    thumbnail_path: str = ""
-
-    # YouTube result
-    youtube_video_id: str = ""
-    youtube_url: str = ""
-
-
-class HistoryStorytellerFlow(Flow[HistoryProductionState]):
-    """End-to-end history storytelling pipeline as a CrewAI Flow."""
-
-    @start()
-    def init_run(self) -> None:
-        self.state.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        setup_output_dirs(settings.output_dir)
-        logger.info("=" * 60)
-        logger.info("History pipeline run started  —  ID: %s", self.state.run_id)
-        logger.info("=" * 60)
-
-    @listen(init_run)
-    def pick_and_research(self) -> None:
-        """Pick a history topic and generate a deep research brief."""
-        hs = generate_history_video_script(
-            era=self.state.era,
-            theme=self.state.theme,
-            language=self.state.language,
-        )
-        self.state.topic = hs.topic
-        self.state.history_era = hs.era
-        self.state.region = hs.region
-        self.state.research_brief = hs.research_brief
-        self.state.full_script = hs.full_script
-        self.state.title = hs.title
-        self.state.description = hs.description
-        self.state.tags = hs.tags
-        self.state.thumbnail_text = hs.thumbnail_text
-        self.state.scenes = hs.scenes
-        self.state.scene_image_prompts = hs.scene_image_prompts
-        logger.info("History topic: %s (%s)", hs.topic, hs.era)
-
-    @listen(pick_and_research)
-    def create_voiceover(self) -> None:
-        """Convert the documentary script to narration audio."""
-        audio_path = (
-            Path(settings.output_dir)
-            / "audio"
-            / f"{self.state.run_id}_narration.mp3"
-        )
-        self.state.audio_path = str(
-            generate_voiceover(self.state.full_script, audio_path, language=self.state.language)
-        )
-
-    @listen(create_voiceover)
-    def fetch_visuals(self) -> None:
-        """Generate historically-styled AI images for each scene."""
-        images_dir = Path(settings.output_dir) / "images"
-        paths = generate_scene_images(
-            image_prompts=self.state.scene_image_prompts,
-            output_dir=images_dir,
-            run_id=self.state.run_id,
-        )
-        self.state.image_paths = [str(p) for p in paths]
-
-    @listen(fetch_visuals)
-    def compile_video(self) -> None:
-        """Assemble the final MP4 with Ken Burns animated images."""
-        video_dir = Path(settings.output_dir) / "videos"
-        safe_title = sanitize_filename(self.state.title, max_length=60)
-        video_path = video_dir / f"{self.state.run_id}_{safe_title}.mp4"
-
-        music_dir = Path("assets/music")
-        music_path: Optional[Path] = None
-        if music_dir.exists():
-            for ext in ("*.mp3", "*.wav", "*.ogg", "*.m4a"):
-                candidates = list(music_dir.glob(ext))
-                if candidates:
-                    music_path = candidates[0]
-                    break
-
-        assembled = assemble_video(
-            image_paths=[Path(p) for p in self.state.image_paths],
-            scenes=self.state.scenes,
-            audio_path=Path(self.state.audio_path),
-            output_path=video_path,
-            music_path=music_path,
-            animated=True,   # Ken Burns effect for history videos
-        )
-        self.state.video_path = str(assembled)
-
-        thumb_path = (
-            Path(settings.output_dir)
-            / "thumbnails"
-            / f"{self.state.run_id}_thumb.jpg"
-        )
-        generate_thumbnail(
-            hero_image_path=Path(self.state.image_paths[0]),
-            headline_text=self.state.title,
-            thumbnail_text=self.state.thumbnail_text,
-            output_path=thumb_path,
-        )
-        self.state.thumbnail_path = str(thumb_path)
-
-    @listen(compile_video)
-    def upload_to_youtube(self) -> None:
-        """Upload to YouTube under the Education category."""
-        creds = authenticate(settings.youtube_credentials_file)
-
-        video_id = upload_video(
-            credentials=creds,
-            video_path=Path(self.state.video_path),
-            title=self.state.title,
-            description=self.state.description,
-            tags=self.state.tags,
-            category_id=settings.youtube_history_category_id,  # Education
-            privacy_status=settings.youtube_privacy,
-        )
-        self.state.youtube_video_id = video_id
-
-        if self.state.thumbnail_path:
-            set_thumbnail(creds, video_id, Path(self.state.thumbnail_path))
-
-        self.state.youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+        try:
+            url = upload_reel(
+                video_path=Path(self.state.video_path),
+                caption=full_caption,
+                cover_image_path=Path(self.state.thumbnail_path) if self.state.thumbnail_path else None,
+            )
+            self.state.instagram_url = url
+        except Exception as exc:
+            logger.error("Instagram upload failed: %s", exc)
+            logger.info(
+                "Video is saved locally at: %s — upload manually if needed.",
+                self.state.video_path,
+            )
+            self.state.instagram_url = f"file://{self.state.video_path}"
+            return
 
         logger.info("=" * 60)
-        logger.info("HISTORY VIDEO PUBLISHED  ✓")
-        logger.info("URL: %s", self.state.youtube_url)
+        logger.info("REEL PUBLISHED  ✓")
+        logger.info("URL: %s", self.state.instagram_url)
         logger.info("Title: %s", self.state.title)
         logger.info("=" * 60)
 
         cleanup_old_outputs(settings.output_dir, keep_latest=5)
+
+

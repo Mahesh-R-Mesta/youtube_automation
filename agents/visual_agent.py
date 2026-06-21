@@ -38,11 +38,10 @@ _SCHNELL_URL = "https://gateway.pixazo.ai/flux-1-schnell/v1/getData"
 # Flux 2 Klein — ~$0.0007/image, better quality, also synchronous
 _KLEIN_URL = "https://gateway.pixazo.ai/flux-2-klein-4b/v1/generateImage"
 
-# Output dimensions: 1280×720 (16:9 landscape). The video_editor resizes
-# all frames to 1920×1080 anyway, so 1280×720 gives excellent quality
-# while staying within Pixazo's recommended sizes.
-_IMG_WIDTH = 1280
-_IMG_HEIGHT = 720
+# Portrait 9:16 dimensions for Instagram Reels.
+# 720×1280 generates crisp portrait images that fill the 1080×1920 Reel frame.
+_IMG_WIDTH = 720
+_IMG_HEIGHT = 1280
 
 # Brief delay between generation calls to avoid hitting rate limits
 _INTER_REQUEST_DELAY = 1.5

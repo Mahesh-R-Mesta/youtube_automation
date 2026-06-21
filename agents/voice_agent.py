@@ -1,13 +1,14 @@
 """
 Voiceover Agent
 ────────────────
-Converts the video script to speech.
+Converts the narration script to Indian-accented English speech.
 
-Primary  → edge-tts (Microsoft Edge TTS, ~400 voices, completely free, no API key)
-Fallback → ElevenLabs (10K credits/month free tier, best quality)
+Primary  → edge-tts (Microsoft Edge TTS, free, no API key required)
+Fallback → ElevenLabs (10K credits/month free tier)
 
-edge-tts is the commercial-safe primary choice. ElevenLabs free tier does NOT
-include a commercial use license, so it is only used as a technical fallback.
+Default voices:
+  Female: en-IN-NeerjaNeural  — warm, natural Indian English
+  Male:   en-IN-PrabhatNeural — clear, authoritative Indian English
 """
 
 import asyncio
@@ -17,7 +18,7 @@ from pathlib import Path
 from utils.logger import logger
 from config.settings import settings
 
-# Clean-up pattern — strips CrewAI/script markers before sending to TTS
+# Clean-up pattern — strips script scene markers before sending to TTS
 _SCENE_MARKER_RE = re.compile(r"\|SCENE_\d+\|")
 _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
 
@@ -35,8 +36,7 @@ def _clean_script(script: str) -> str:
 
 async def _edge_tts_async(text: str, voice: str, rate: str, output_path: Path) -> Path:
     """Async core for edge-tts generation."""
-    import edge_tts  # imported lazily to keep startup fast
-
+    import edge_tts
     communicate = edge_tts.Communicate(text, voice=voice, rate=rate)
     await communicate.save(str(output_path))
     return output_path
@@ -55,7 +55,7 @@ def generate_edge_tts(
         text:        Narration text (scene markers already removed).
         output_path: Destination .mp3 file path.
         voice:       Edge TTS voice name (default from settings).
-        rate:        Speech rate adjustment, e.g. "+5%" or "-10%".
+        rate:        Speech rate adjustment, e.g. "+0%" or "-5%".
 
     Returns:
         Path to the saved MP3 file.
@@ -67,7 +67,7 @@ def generate_edge_tts(
     rate = rate or settings.tts_rate
 
     asyncio.run(_edge_tts_async(text, voice, rate, output_path))
-    logger.info("edge-tts audio saved → %s", output_path.name)
+    logger.info("edge-tts audio saved → %s (voice=%s)", output_path.name, voice)
     return output_path
 
 
@@ -80,13 +80,8 @@ def generate_elevenlabs(
     output_path: str | Path,
     voice_id: str | None = None,
 ) -> Path:
-    """
-    Generate speech with ElevenLabs and save as MP3.
-    Requires ELEVENLABS_API_KEY in .env.
-
-    Uses eleven_multilingual_v2 model for best stability.
-    """
-    from elevenlabs import ElevenLabs  # lazy import
+    """Generate speech with ElevenLabs and save as MP3."""
+    from elevenlabs import ElevenLabs
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,26 +112,34 @@ def generate_elevenlabs(
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_voiceover(script: str, output_path: str | Path, language: str = "english") -> Path:
+def generate_voiceover(
+    script: str,
+    output_path: str | Path,
+    voice_gender: str = "female",
+) -> Path:
     """
-    Generate voiceover for the full script. Tries edge-tts first;
-    falls back to ElevenLabs if edge-tts raises an exception.
+    Generate voiceover for the spiritual narration script.
+    Tries edge-tts first; falls back to ElevenLabs on failure.
 
     Args:
-        script:      Full video script (may contain |SCENE_N| markers).
-        output_path: Destination .mp3 file path.
-        language:    "english" (default) or "hindi". Selects the TTS voice.
+        script:       Full narration script (may contain |SCENE_N| markers).
+        output_path:  Destination .mp3 file path.
+        voice_gender: "female" (default) → en-IN-NeerjaNeural
+                      "male"            → en-IN-PrabhatNeural
 
     Returns:
         Path to the saved MP3 file.
 
     Raises:
-        RuntimeError: If both TTS providers fail.
+        RuntimeError: If all TTS providers fail.
     """
     clean_text = _clean_script(script)
 
-    # Pick voice based on language
-    voice = settings.tts_hindi_voice if language == "hindi" else settings.tts_voice
+    # Select Indian English voice based on gender preference
+    if voice_gender == "male":
+        voice = settings.tts_male_voice
+    else:
+        voice = settings.tts_voice  # female (Neerja) is the default
 
     # Primary: edge-tts (free, no API key)
     try:
@@ -155,3 +158,4 @@ def generate_voiceover(script: str, output_path: str | Path, language: str = "en
         "All TTS providers failed. "
         "Check your network connection and API keys in .env."
     )
+

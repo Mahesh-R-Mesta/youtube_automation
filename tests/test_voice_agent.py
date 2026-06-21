@@ -17,7 +17,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from agents.voice_agent import _clean_script, generate_voiceover
+from agents.voice_agent import _clean_script, generate_voiceover, generate_edge_tts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,8 +123,9 @@ class TestGenerateVoiceover:
     @patch("agents.voice_agent.generate_edge_tts", side_effect=RuntimeError("down"))
     @patch("agents.voice_agent.settings")
     def test_raises_runtime_error_when_both_fail(self, mock_settings, _mock_edge, tmp_path):
-        mock_settings.tts_voice = "en-US-AriaNeural"
-        mock_settings.tts_rate = "+5%"
+        mock_settings.tts_voice = "en-IN-NeerjaNeural"
+        mock_settings.tts_male_voice = "en-IN-PrabhatNeural"
+        mock_settings.tts_rate = "+0%"
         mock_settings.elevenlabs_api_key = None  # no fallback available
 
         with pytest.raises(RuntimeError, match="All TTS providers failed"):
@@ -132,16 +133,31 @@ class TestGenerateVoiceover:
 
     @patch("agents.voice_agent.generate_edge_tts")
     @patch("agents.voice_agent.settings")
-    def test_uses_hindi_voice_when_language_is_hindi(self, mock_settings, mock_edge, tmp_path):
-        mock_settings.tts_voice = "en-US-AriaNeural"
-        mock_settings.tts_hindi_voice = "hi-IN-SwaraNeural"
+    def test_uses_male_voice_when_voice_gender_is_male(self, mock_settings, mock_edge, tmp_path):
+        mock_settings.tts_voice = "en-IN-NeerjaNeural"
+        mock_settings.tts_male_voice = "en-IN-PrabhatNeural"
+        mock_settings.tts_rate = "+0%"
         expected = tmp_path / "narration.mp3"
         mock_edge.return_value = expected
 
-        generate_voiceover("कुछ पाठ।", expected, language="hindi")
+        generate_voiceover("Some script text.", expected, voice_gender="male")
 
         _args, _kwargs = mock_edge.call_args
-        assert _kwargs.get("voice") == "hi-IN-SwaraNeural"
+        assert _kwargs.get("voice") == "en-IN-PrabhatNeural"
+
+    @patch("agents.voice_agent.generate_edge_tts")
+    @patch("agents.voice_agent.settings")
+    def test_uses_female_voice_by_default(self, mock_settings, mock_edge, tmp_path):
+        mock_settings.tts_voice = "en-IN-NeerjaNeural"
+        mock_settings.tts_male_voice = "en-IN-PrabhatNeural"
+        mock_settings.tts_rate = "+0%"
+        expected = tmp_path / "narration.mp3"
+        mock_edge.return_value = expected
+
+        generate_voiceover("Some script text.", expected)
+
+        _args, _kwargs = mock_edge.call_args
+        assert _kwargs.get("voice") == "en-IN-NeerjaNeural"
 
     @patch("agents.voice_agent.generate_edge_tts")
     @patch("agents.voice_agent.settings")

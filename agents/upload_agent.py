@@ -1,190 +1,115 @@
 """
-YouTube Upload Agent
-─────────────────────
-Handles OAuth2 authentication and video upload to the YouTube Data API v3.
+Instagram Upload Agent
+───────────────────────
+Uploads the finished spiritual Reel to Instagram using instagrapi.
 
-Quota costs (default 10 000 units/day):
-  • videos.insert   → 1 600 units  (~6 uploads/day on free quota)
-  • thumbnails.set  →    50 units
+⚠️  instagrapi uses Instagram's private (unofficial) API.
+    This is against Meta's Terms of Service and carries a risk of account
+    suspension, especially on personal accounts.
+    Recommendation: use a dedicated creator/test account.
 
-First run opens a browser for OAuth2 consent; subsequent runs refresh
-the cached token automatically (token.json).
+Session caching:
+  On first login, instagrapi saves a session JSON to disk.
+  Subsequent runs reload the session — no repeated password logins.
+  Set INSTAGRAM_SESSION_FILE in .env to customise the path.
 
 Prerequisites:
-  1. In Google Cloud Console, enable "YouTube Data API v3"
-  2. Create OAuth 2.0 credentials → Desktop app → download as client_secrets.json
-  3. Set YOUTUBE_CREDENTIALS_FILE=client_secrets.json in .env
-  4. Run once interactively so the browser consent flow can complete
+  pip install instagrapi
+  Set INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD in .env
 """
 
+import json
 from pathlib import Path
-
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from typing import Optional
 
 from utils.logger import logger
-
-# Only the upload scope is required — never request unnecessary permissions
-_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-_TOKEN_FILE = "token.json"
+from config.settings import settings
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Authentication
+# Session management
 # ─────────────────────────────────────────────────────────────────────────────
 
-def authenticate(credentials_file: str = "client_secrets.json") -> Credentials:
+def _get_client():
     """
-    Obtain valid OAuth2 credentials for the YouTube Data API.
-
-    Token caching:
-      - Reads from token.json on disk if it exists.
-      - Auto-refreshes expired tokens using the stored refresh_token.
-      - Opens a browser window for first-time authorisation if no valid
-        token is found.
-
-    Args:
-        credentials_file: Path to the client_secrets.json downloaded from
-                          Google Cloud Console.
-
-    Returns:
-        Valid google.oauth2.credentials.Credentials object.
+    Return an authenticated instagrapi Client.
+    Loads saved session if available; falls back to fresh login.
+    Persists session after any login to disk.
     """
-    creds: Credentials | None = None
+    from instagrapi import Client  # lazy import
 
-    token_path = Path(_TOKEN_FILE)
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), _SCOPES)
+    username = settings.instagram_username
+    password = settings.instagram_password
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            logger.info("YouTube OAuth2 token refreshed.")
-        else:
-            creds_path = Path(credentials_file)
-            if not creds_path.exists():
-                raise FileNotFoundError(
-                    f"YouTube credentials file not found: '{credentials_file}'.\n"
-                    "Steps to fix:\n"
-                    "  1. Go to https://console.cloud.google.com/\n"
-                    "  2. Enable 'YouTube Data API v3'\n"
-                    "  3. Create OAuth 2.0 credentials (Desktop app)\n"
-                    "  4. Download as 'client_secrets.json'\n"
-                    "  5. Set YOUTUBE_CREDENTIALS_FILE in .env"
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), _SCOPES)
-            creds = flow.run_local_server(port=0)
-            logger.info("YouTube OAuth2 authorisation completed.")
+    if not username or not password:
+        raise ValueError(
+            "INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD must be set in .env to upload Reels."
+        )
 
-        # Persist token for future runs
-        token_path.write_text(creds.to_json(), encoding="utf-8")
+    cl = Client()
+    session_path = Path(settings.instagram_session_file)
 
-    return creds
+    if session_path.exists():
+        try:
+            cl.load_settings(session_path)
+            cl.login(username, password)   # validates + refreshes the cached session
+            cl.dump_settings(session_path)
+            logger.info("Instagram session loaded from %s", session_path.name)
+            return cl
+        except Exception as exc:
+            logger.warning(
+                "Cached Instagram session invalid (%s). Performing fresh login.", exc
+            )
+
+    # Fresh login
+    cl.login(username, password)
+    cl.dump_settings(session_path)
+    logger.info("Instagram login successful. Session saved to %s", session_path.name)
+    return cl
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Upload
 # ─────────────────────────────────────────────────────────────────────────────
 
-def upload_video(
-    credentials: Credentials,
+def upload_reel(
     video_path: Path,
-    title: str,
-    description: str,
-    tags: list[str],
-    category_id: str = "25",
-    privacy_status: str = "public",
+    caption: str,
+    cover_image_path: Optional[Path] = None,
 ) -> str:
     """
-    Upload a video file to YouTube using a resumable, chunked upload.
+    Upload a video as an Instagram Reel.
 
     Args:
-        credentials:    Authorised OAuth2 credentials.
-        video_path:     Path to the .mp4 file.
-        title:          Video title (truncated to 100 chars).
-        description:    Video description (truncated to 5000 chars).
-        tags:           List of tags (max 15 used).
-        category_id:    YouTube category ID. 25 = News & Politics.
-        privacy_status: "public", "unlisted", or "private".
+        video_path:        Path to the .mp4 file (max 90 seconds, 9:16 portrait).
+        caption:           Instagram caption text (max 2200 characters).
+        cover_image_path:  Optional cover image (.jpg); first frame used if None.
 
     Returns:
-        The YouTube video ID string (e.g. "dQw4w9WgXcQ").
+        Public Instagram post URL (e.g. "https://www.instagram.com/p/ABC123/").
 
     Raises:
-        googleapiclient.errors.HttpError: On API errors.
+        ValueError:   If Instagram credentials are not configured.
+        RuntimeError: If the upload fails after instagrapi raises an error.
     """
-    youtube = build("youtube", "v3", credentials=credentials)
+    cl = _get_client()
 
-    body = {
-        "snippet": {
-            "title": title[:100],
-            "description": description[:5000],
-            "tags": tags[:15],
-            "categoryId": category_id,
-            "defaultLanguage": "en",
-        },
-        "status": {
-            "privacyStatus": privacy_status,
-            "selfDeclaredMadeForKids": False,
-        },
-    }
+    # Truncate caption to Instagram's 2200-character limit
+    safe_caption = caption[:2200]
 
-    media = MediaFileUpload(
-        str(video_path),
-        mimetype="video/mp4",
-        resumable=True,
-        chunksize=10 * 1024 * 1024,  # 10 MB per chunk
-    )
-
-    request = youtube.videos().insert(
-        part=",".join(body.keys()),
-        body=body,
-        media_body=media,
-    )
-
-    logger.info("Uploading '%s' to YouTube...", video_path.name)
-
-    response = None
-    while response is None:
-        status, response = request.next_chunk()
-        if status:
-            progress = int(status.progress() * 100)
-            logger.info("Upload progress: %d%%", progress)
-
-    video_id: str = response["id"]
-    logger.info("Upload complete — video ID: %s", video_id)
-    return video_id
-
-
-def set_thumbnail(
-    credentials: Credentials,
-    video_id: str,
-    thumbnail_path: Path,
-) -> None:
-    """
-    Set a custom JPEG thumbnail on an uploaded video.
-
-    Note: YouTube requires the channel to be verified (phone number) before
-    custom thumbnails can be set. This call will silently log an error if the
-    channel is unverified rather than crashing the pipeline.
-
-    Costs 50 units of YouTube API quota.
-    """
-    youtube = build("youtube", "v3", credentials=credentials)
+    logger.info("Uploading Reel: %s", video_path.name)
 
     try:
-        youtube.thumbnails().set(
-            videoId=video_id,
-            media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/jpeg"),
-        ).execute()
-        logger.info("Thumbnail set for video %s", video_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Could not set thumbnail for video %s: %s — "
-            "Ensure your YouTube channel is verified (phone number required for custom thumbnails).",
-            video_id,
-            exc,
+        media = cl.clip_upload(
+            path=str(video_path),
+            caption=safe_caption,
+            thumbnail=str(cover_image_path) if cover_image_path and cover_image_path.exists() else None,
         )
+        reel_url = f"https://www.instagram.com/p/{media.code}/"
+        logger.info("Reel uploaded successfully → %s", reel_url)
+        return reel_url
+    except Exception as exc:
+        raise RuntimeError(
+            f"Instagram Reel upload failed: {exc}\n"
+            "Check your credentials, account status, and network connection."
+        ) from exc

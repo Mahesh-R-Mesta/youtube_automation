@@ -1,17 +1,12 @@
 # ── Core Orchestration ────────────────────────────────────────
-crewai==1.11.1
+crewai>=1.11,<1.13
 
 # ── LLM: Google Gemini 2.5 Flash ─────────────────────────────
 # NOTE: Use google-genai, NOT google-generativeai (deprecated Nov 2025)
 google-genai>=0.7.0
 
-# ── Trend Discovery ───────────────────────────────────────────
-# RSS (no key needed) + Guardian API + NewsData.io (optional free keys)
-feedparser==6.0.11
-# requests already listed under Visuals
-
-# ── Text-to-Speech ────────────────────────────────────────────
-# Primary TTS: free, no API key required
+# ── Text-to-Speech (Indian English voices) ────────────────────
+# Primary TTS: free, no API key — voices: en-IN-NeerjaNeural, en-IN-PrabhatNeural
 edge-tts==7.2.8
 # Fallback TTS: free tier 10K credits/month
 elevenlabs==2.40.0
@@ -20,15 +15,17 @@ elevenlabs==2.40.0
 requests==2.32.3
 Pillow>=9.2
 
-# ── Video Editing ─────────────────────────────────────────────
+# ── Video Editing (Portrait 9:16 for Reels) ───────────────────
 # NOTE: moviepy v2 has a completely different API from v1
 # Use with_duration(), with_audio(), resized() — NOT v1 method names
 moviepy==2.2.1
 
-# ── YouTube Upload ────────────────────────────────────────────
-google-api-python-client==2.193.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.1
+# ── Instagram Upload ──────────────────────────────────────────
+# WARNING: instagrapi uses Instagram's private API.
+# Against Meta ToS. Use a dedicated test account.
+# Install with: pip install "instagrapi==2.3.0" --no-deps
+# (avoids pydantic version conflict with crewai)
+instagrapi==2.3.0
 
 # ── Scheduling ────────────────────────────────────────────────
 # Use APScheduler 3.x (NOT 4.x — completely different API)
@@ -36,8 +33,11 @@ APScheduler==3.11.2
 
 # ── Config & Settings ─────────────────────────────────────────
 python-dotenv>=1.1.1
-pydantic>=2.7,<3.0
+pydantic>=2.11,<2.12
 pydantic-settings>=2.3,<3.0
+
+# ── Retry logic ───────────────────────────────────────────────
+tenacity>=8.2,<10.0
 
 # ── Utilities ─────────────────────────────────────────────────
 tenacity==8.5.0
